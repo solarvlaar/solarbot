@@ -21,8 +21,8 @@ Het model wordt automatisch gedownload van Google Drive bij de eerste start.
 ## ✅ .env template
 
 ```env
-TWILIO_ACCOUNT_SID=your_account_sid
-TWILIO_AUTH_TOKEN=your_auth_token
+TWILIO_ACCOUNT_SID=US42685bad8695b7ba025418dfddf28f0c
+TWILIO_AUTH_TOKEN=96162e93e92fc98be19e3e2063f7c889
 TWILIO_WHATSAPP_NUMBER=+15558665761
 YOUR_PHONE_NUMBER=+31687437563
 ```
