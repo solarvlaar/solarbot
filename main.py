@@ -1,71 +1,80 @@
+import os
 from flask import Flask, request
-import requests
-import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from twilio.twiml.messaging_response import MessagingResponse
+import requests
 
 app = Flask(__name__)
 
-# 📍 Laden van model
-model_path = "./model"  # Of geef je pad aan als je dat elders mount
+# 🤖 Model laden
+model_path = "./model"
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForCausalLM.from_pretrained(model_path)
 generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
 
-# 🔐 Zet je API keys hier
-TELEGRAM_TOKEN = "VUL_HIER_JE_TELEGRAM_BOT_TOKEN_IN"
+# 📱 Twilio instellingen
 TWILIO_NUMBER = "whatsapp:+15558665761"
-RECIPIENT_NUMBER = "whatsapp:+316XXXXXXX"  # Alleen nodig als jij Twilio direct test
+RECIPIENT_NUMBERS = [
+    "whatsapp:+31687437563",  # ontvanger 1
+    "whatsapp:+31683050411",  # ontvanger 2
+]
+ACCOUNT_SID = "AC431b5be05867e4dc6b7298d8b886a07b"
+AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")  # Zet deze in Railway secrets
 
-# 🎯 Genereren van antwoord
-def generate_response(prompt):
+# 🌐 Telegram (optioneel)
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+
+@app.route("/whatsapp", methods=["POST"])
+def whatsapp_reply():
+    incoming_msg = request.values.get("Body", "")
+    from_number = request.values.get("From", "")
+    print(f"[WhatsApp] Van {from_number}: {incoming_msg}")
+
     response = generator(
-        prompt,
-        max_new_tokens=64,
+        incoming_msg,
+        max_length=60,
         do_sample=True,
         top_k=50,
         top_p=0.95,
-        temperature=0.7,
-        num_return_sequences=1,
-    )[0]["generated_text"]
-    
-    return response.replace(prompt, "").strip()
+        temperature=0.9,
+        num_return_sequences=1
+    )[0]['generated_text']
 
-# ✅ WhatsApp endpoint
-@app.route("/whatsapp", methods=["POST"])
-def whatsapp_webhook():
-    from_number = request.form.get("From")
-    body = request.form.get("Body")
+    print(f"[WhatsApp] Antwoord: {response}")
+    twilio_response = MessagingResponse()
+    twilio_response.message(response)
+    return str(twilio_response)
 
-    response = generate_response(body)
-
-    payload = {
-        "From": TWILIO_NUMBER,
-        "To": from_number,
-        "Body": response,
-    }
-    requests.post("https://api.twilio.com/2010-04-01/Accounts/YOUR_SID_HERE/Messages.json", data=payload, auth=("YOUR_SID_HERE", "YOUR_AUTH_TOKEN_HERE"))
-    return "ok", 200
-
-# ✅ Telegram endpoint
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
-    data = request.get_json()
-    chat_id = data["message"]["chat"]["id"]
-    user_message = data["message"]["text"]
+    data = request.json
+    message = data.get("message", {}).get("text", "")
+    chat_id = data.get("message", {}).get("chat", {}).get("id", "")
 
-    response = generate_response(user_message)
+    print(f"[Telegram] Gebruiker zei: {message}")
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    if not message:
+        return "OK"
+
+    response = generator(
+        message,
+        max_length=60,
+        do_sample=True,
+        top_k=50,
+        top_p=0.95,
+        temperature=0.9,
+        num_return_sequences=1
+    )[0]['generated_text']
+
+    print(f"[Telegram] Bot antwoordt: {response}")
+    telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": chat_id,
         "text": response,
     }
-    requests.post(url, json=payload)
+    requests.post(telegram_url, json=payload)
+    return "OK"
 
-    return "ok", 200
-
-# 👋 Root check
-@app.route("/", methods=["GET"])
-def home():
-    return "🤖 Solar chatbot active!", 200
-
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
