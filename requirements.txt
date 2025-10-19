@@ -4,3 +4,4 @@ transformers
 torch
 twilio
 python-telegram-bot==20.3
+gunicorn==22.0.0
