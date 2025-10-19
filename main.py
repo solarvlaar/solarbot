@@ -1,78 +1,74 @@
 import os
-import random
 import requests
-from flask import Flask, request, Response
+from flask import Flask, request
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from twilio.twiml.messaging_response import MessagingResponse
 
 app = Flask(__name__)
 
-# ----------------------------------------------------
-# 🤖 Model laden met veilige fallback
-# ----------------------------------------------------
+# 🧠 MODEL CONFIG ----------------------------------------------------
 MODEL_PATH = os.getenv("MODEL_PATH", "microsoft/DialoGPT-medium")
+tokenizer = None
+model = None
+generator = None
 
-try:
-    # eerst proberen lokaal pad of HF repo te laden
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-    model = AutoModelForCausalLM.from_pretrained(MODEL_PATH)
-    generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
-    print(f"[INFO] Model geladen: {MODEL_PATH}")
-except Exception as e:
-    # fallback naar DialoGPT als het lokale pad faalt
-    print(f"[WARN] Kon model niet laden ({e}), gebruik fallback DialoGPT.")
-    tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
-    model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
-    generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
 
-# ----------------------------------------------------
-# ⚙️ Config
-# ----------------------------------------------------
-TWILIO_NUMBER = "whatsapp:+15558665761"
-ACCOUNT_SID = "AC431b5be05867e4dc6b7298d8b886a07b"
-AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")  # in Railway secrets
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+def load_model():
+    """Laadt het taalmodel pas bij eerste gebruik (lazy load)."""
+    global tokenizer, model, generator
+    if generator is None:
+        try:
+            print(f"[INFO] 📦 Loading model: {MODEL_PATH} ...")
+            tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+            model = AutoModelForCausalLM.from_pretrained(MODEL_PATH)
+            generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
+            print("[INFO] ✅ Model loaded successfully.")
+        except Exception as e:
+            print(f"[WARN] Kon model niet laden ({e}), gebruik fallback DialoGPT-small.")
+            tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-small")
+            model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-small")
+            generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
+            print("[INFO] ✅ Fallback model loaded.")
 
-# ----------------------------------------------------
-# 📱 WhatsApp route
-# ----------------------------------------------------
+
+# 💬 WHATSAPP ROUTE ---------------------------------------------------
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_reply():
-    incoming_msg = request.values.get("Body", "").strip()
-    from_number = request.values.get("From", "")
+    if generator is None:
+        load_model()
 
+    incoming_msg = request.values.get("Body", "")
+    from_number = request.values.get("From", "")
     print(f"[WhatsApp] Van {from_number}: {incoming_msg}")
 
-    if not incoming_msg:
-        return "OK"
-
-    # korte, natuurlijke stijl
     response = generator(
         incoming_msg,
-        max_length=random.randint(30, 60),
+        max_length=60,
         do_sample=True,
         top_k=50,
-        top_p=0.9,
-        temperature=0.8,
+        top_p=0.95,
+        temperature=0.9,
         num_return_sequences=1
-    )[0]["generated_text"]
+    )[0]['generated_text']
 
-    reply = response.replace(incoming_msg, "").strip()
-    print(f"[WhatsApp] Antwoord: {reply}")
-
+    print(f"[WhatsApp] Antwoord: {response}")
     twilio_response = MessagingResponse()
-    twilio_response.message(reply)
+    twilio_response.message(response)
     return str(twilio_response)
 
-# ----------------------------------------------------
-# 💬 Telegram route
-# ----------------------------------------------------
+
+# 💬 TELEGRAM ROUTE ---------------------------------------------------
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+
+
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
+    if generator is None:
+        load_model()
+
     data = request.json
     message = data.get("message", {}).get("text", "")
     chat_id = data.get("message", {}).get("chat", {}).get("id", "")
-
     print(f"[Telegram] Gebruiker zei: {message}")
 
     if not message:
@@ -86,29 +82,23 @@ def telegram_webhook():
         top_p=0.95,
         temperature=0.9,
         num_return_sequences=1
-    )[0]["generated_text"]
+    )[0]['generated_text']
 
-    reply = response.replace(message, "").strip()
-    print(f"[Telegram] Bot antwoordt: {reply}")
-
-    if TELEGRAM_TOKEN:
-        telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": chat_id, "text": reply}
-        requests.post(telegram_url, json=payload)
-
+    print(f"[Telegram] Bot antwoordt: {response}")
+    telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": response}
+    requests.post(telegram_url, json=payload)
     return "OK"
 
-# ----------------------------------------------------
-# 🌍 Home route
-# ----------------------------------------------------
+
+# 🌍 HEALTHCHECK ------------------------------------------------------
 @app.route("/", methods=["GET"])
 def home():
     return "🚂 SolarBot is live and waiting at the station."
 
-# ----------------------------------------------------
-# 🚀 Start server
-# ----------------------------------------------------
+
+# 🚀 MAIN ENTRY -------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
+    print(f"[INFO] Starting Flask server on port {port} ...")
     app.run(host="0.0.0.0", port=port)
-    
