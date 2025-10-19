@@ -7,7 +7,7 @@ import requests
 app = Flask(__name__)
 
 # 🤖 Model laden
-model_path = "./model"
+MODEL_PATH = os.getenv("MODEL_PATH", "microsoft/DialoGPT-medium")
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForCausalLM.from_pretrained(model_path)
 generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
