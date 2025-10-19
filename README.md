@@ -6,6 +6,3 @@ Having archived all whatsapp chats for over 12 years, Solar used all the whatsap
 Made in context of the [art]ificial intelligence minor from the artistic research group technology driven art at Zuyd Hogeschool. 
 
 Thanks to Peter Missotten, Casper Wortmann, Whatsapp, GPT language models, my ex lovers
-
-
-
