@@ -1,7 +1,18 @@
-requests
-flask
-transformers
-torch
-twilio
-python-telegram-bot==20.3
+# --- Core server ---
+flask==3.0.3
 gunicorn==22.0.0
+twilio==9.3.2
+
+# --- AI model ---
+transformers==4.44.2
+torch==2.2.2+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
+accelerate==0.33.0
+safetensors==0.4.2
+numpy==1.26.4
+
+# --- Utilities ---
+requests==2.32.3
+
+# --- Optional (for Telegram later) ---
+python-telegram-bot==20.3
