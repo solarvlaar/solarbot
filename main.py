@@ -4,9 +4,15 @@ from flask import Flask, request
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from twilio.twiml.messaging_response import MessagingResponse
 
+# ------------------------------------------------------------
+# 🚂 Initialize Flask first — before touching Transformers
+# ------------------------------------------------------------
 app = Flask(__name__)
+print("[BOOT] Flask app initialized, waiting for requests...")
 
-# 🧠 MODEL CONFIG ----------------------------------------------------
+# ------------------------------------------------------------
+# 🧠 MODEL CONFIG (lazy load, nothing heavy at import time)
+# ------------------------------------------------------------
 MODEL_PATH = os.getenv("MODEL_PATH", "microsoft/DialoGPT-medium")
 tokenizer = None
 model = None
@@ -31,7 +37,9 @@ def load_model():
             print("[INFO] ✅ Fallback model loaded.")
 
 
-# 💬 WHATSAPP ROUTE ---------------------------------------------------
+# ------------------------------------------------------------
+# 💬 WhatsApp route
+# ------------------------------------------------------------
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_reply():
     if generator is None:
@@ -51,13 +59,14 @@ def whatsapp_reply():
         num_return_sequences=1
     )[0]['generated_text']
 
-    print(f"[WhatsApp] Antwoord: {response}")
     twilio_response = MessagingResponse()
     twilio_response.message(response)
     return str(twilio_response)
 
 
-# 💬 TELEGRAM ROUTE ---------------------------------------------------
+# ------------------------------------------------------------
+# 💬 Telegram route (optional)
+# ------------------------------------------------------------
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 
@@ -69,7 +78,6 @@ def telegram_webhook():
     data = request.json
     message = data.get("message", {}).get("text", "")
     chat_id = data.get("message", {}).get("chat", {}).get("id", "")
-    print(f"[Telegram] Gebruiker zei: {message}")
 
     if not message:
         return "OK"
@@ -84,21 +92,24 @@ def telegram_webhook():
         num_return_sequences=1
     )[0]['generated_text']
 
-    print(f"[Telegram] Bot antwoordt: {response}")
     telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": response}
     requests.post(telegram_url, json=payload)
     return "OK"
 
 
-# 🌍 HEALTHCHECK ------------------------------------------------------
+# ------------------------------------------------------------
+# 🌍 Health check
+# ------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def home():
     return "🚂 SolarBot is live and waiting at the station."
 
 
-# 🚀 MAIN ENTRY -------------------------------------------------------
+# ------------------------------------------------------------
+# 🚀 Local entry point (not used by Gunicorn)
+# ------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    print(f"[INFO] Starting Flask server on port {port} ...")
+    print(f"[INFO] Starting Flask server locally on port {port} ...")
     app.run(host="0.0.0.0", port=port)
