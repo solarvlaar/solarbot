@@ -1,5 +1,6 @@
 # --- Core server ---
 flask==3.0.3
+gevent==24.2.1
 gunicorn==22.0.0
 twilio==9.3.2
 
