@@ -1,16 +1,18 @@
 import os
+import sys
 import time
 import requests
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from twilio.twiml.messaging_response import MessagingResponse
 
 # ------------------------------------------------------------
-# 🚂 Initialize Flask first — before touching Transformers
+# 🚂 Initialize Flask before loading any heavy modules
 # ------------------------------------------------------------
 app = Flask(__name__)
 print("[BOOT] Flask app initialized, waiting for requests...")
-time.sleep(3)  # ⏳ geef Railway even tijd voor de healthcheck
+print("[BOOT] Python version:", sys.version)
+time.sleep(3)  # ⏳ give Railway healthcheck a moment
 
 # ------------------------------------------------------------
 # 🧠 MODEL CONFIG (lazy load)
@@ -104,15 +106,15 @@ def telegram_webhook():
 
 
 # ------------------------------------------------------------
-# 🌍 Health check
+# 🌍 Health check — Railway checks this endpoint
 # ------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def home():
-    return "🚂 SolarBot is live and waiting at the station."
+    return jsonify({"status": "ok", "message": "🚂 SolarBot is alive!"}), 200
 
 
 # ------------------------------------------------------------
-# 🚀 Local entry point (not used by Gunicorn)
+# 🚀 Local entry point (for manual testing)
 # ------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
