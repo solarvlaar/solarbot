@@ -7,12 +7,15 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from twilio.twiml.messaging_response import MessagingResponse
 
 # ------------------------------------------------------------
-# 🚂 Initialize Flask before loading any heavy modules
+# 🚂 Initialize Flask before heavy modules
 # ------------------------------------------------------------
 app = Flask(__name__)
+
+# 👇 Nieuw: geef Railway even tijd voor healthcheck
+print("[BOOT] Initializing Flask app ...")
+time.sleep(5)  # <--- belangrijk: voorkomt te snelle shutdown
 print("[BOOT] Flask app initialized, waiting for requests...")
 print("[BOOT] Python version:", sys.version)
-time.sleep(3)  # ⏳ give Railway healthcheck a moment
 
 # ------------------------------------------------------------
 # 🧠 MODEL CONFIG (lazy load)
@@ -63,7 +66,6 @@ def whatsapp_reply():
         num_return_sequences=1
     )[0]['generated_text']
 
-    print(f"[WhatsApp] Antwoord: {response}")
     twilio_response = MessagingResponse()
     twilio_response.message(response)
     return str(twilio_response)
