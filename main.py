@@ -17,7 +17,7 @@ def startup_ping():
     time.sleep(3)
     try:
         print("[BOOT] Sending self-ping to health endpoint...")
-        requests.get("http://0.0.0.0:" + os.environ.get("PORT", "8080"))
+        requests.get("http://0.0.0.0:" + os.environ.get("PORT", "5000"))
     except Exception as e:
         print(f"[BOOT] Ping failed (but it's fine): {e}")
 
