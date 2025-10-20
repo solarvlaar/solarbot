@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import threading
 import requests
 from flask import Flask, request, jsonify
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
@@ -11,9 +12,20 @@ from twilio.twiml.messaging_response import MessagingResponse
 # ------------------------------------------------------------
 app = Flask(__name__)
 
-# 👇 Nieuw: geef Railway even tijd voor healthcheck
+def startup_ping():
+    """Ping de healthcheck zodat Railway weet dat de server leeft."""
+    time.sleep(3)
+    try:
+        print("[BOOT] Sending self-ping to health endpoint...")
+        requests.get("http://0.0.0.0:" + os.environ.get("PORT", "8080"))
+    except Exception as e:
+        print(f"[BOOT] Ping failed (but it's fine): {e}")
+
+# Start de ping in een aparte thread
+threading.Thread(target=startup_ping, daemon=True).start()
+
 print("[BOOT] Initializing Flask app ...")
-time.sleep(5)  # <--- belangrijk: voorkomt te snelle shutdown
+time.sleep(5)
 print("[BOOT] Flask app initialized, waiting for requests...")
 print("[BOOT] Python version:", sys.version)
 
@@ -27,7 +39,6 @@ generator = None
 
 
 def load_model():
-    """Laadt het taalmodel pas bij eerste gebruik (lazy load)."""
     global tokenizer, model, generator
     if generator is None:
         try:
@@ -44,18 +55,13 @@ def load_model():
             print("[INFO] ✅ Fallback model loaded.")
 
 
-# ------------------------------------------------------------
-# 💬 WhatsApp route
-# ------------------------------------------------------------
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_reply():
     if generator is None:
         load_model()
-
     incoming_msg = request.values.get("Body", "")
     from_number = request.values.get("From", "")
     print(f"[WhatsApp] Van {from_number}: {incoming_msg}")
-
     response = generator(
         incoming_msg,
         max_length=60,
@@ -65,30 +71,22 @@ def whatsapp_reply():
         temperature=0.9,
         num_return_sequences=1
     )[0]['generated_text']
-
     twilio_response = MessagingResponse()
     twilio_response.message(response)
     return str(twilio_response)
 
 
-# ------------------------------------------------------------
-# 💬 Telegram route (optional)
-# ------------------------------------------------------------
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-
 
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
     if generator is None:
         load_model()
-
     data = request.json
     message = data.get("message", {}).get("text", "")
     chat_id = data.get("message", {}).get("chat", {}).get("id", "")
-
     if not message:
         return "OK"
-
     response = generator(
         message,
         max_length=60,
@@ -98,7 +96,6 @@ def telegram_webhook():
         temperature=0.9,
         num_return_sequences=1
     )[0]['generated_text']
-
     print(f"[Telegram] Gebruiker zei: {message}")
     print(f"[Telegram] Bot antwoordt: {response}")
     telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -107,17 +104,11 @@ def telegram_webhook():
     return "OK"
 
 
-# ------------------------------------------------------------
-# 🌍 Health check — Railway checks this endpoint
-# ------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"status": "ok", "message": "🚂 SolarBot is alive!"}), 200
 
 
-# ------------------------------------------------------------
-# 🚀 Local entry point (for manual testing)
-# ------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print(f"[INFO] Starting Flask server locally on port {port} ...")
