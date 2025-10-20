@@ -5,6 +5,7 @@ import threading
 import requests
 from flask import Flask, request, jsonify
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 
 # ------------------------------------------------------------
@@ -37,8 +38,8 @@ tokenizer = None
 model = None
 generator = None
 
-
 def load_model():
+    """Laadt het model pas bij eerste gebruik (lazy load)."""
     global tokenizer, model, generator
     if generator is None:
         try:
@@ -54,14 +55,28 @@ def load_model():
             generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
             print("[INFO] ✅ Fallback model loaded.")
 
+# ------------------------------------------------------------
+# 📱 Twilio config via environment variables
+# ------------------------------------------------------------
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")  # e.g. whatsapp:+15558665761
+RECIPIENT_NUMBERS = os.getenv("RECIPIENT_NUMBERS", "").split(",")
 
+client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+# ------------------------------------------------------------
+# 💬 WhatsApp route
+# ------------------------------------------------------------
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_reply():
     if generator is None:
         load_model()
+
     incoming_msg = request.values.get("Body", "")
     from_number = request.values.get("From", "")
     print(f"[WhatsApp] Van {from_number}: {incoming_msg}")
+
     response = generator(
         incoming_msg,
         max_length=60,
@@ -71,22 +86,39 @@ def whatsapp_reply():
         temperature=0.9,
         num_return_sequences=1
     )[0]['generated_text']
+
+    # Twilio webhook reply
     twilio_response = MessagingResponse()
     twilio_response.message(response)
+
+    # Eventueel pushbericht terugsturen via Twilio REST API
+    for recipient in RECIPIENT_NUMBERS:
+        if recipient.strip():
+            client.messages.create(
+                from_=TWILIO_PHONE_NUMBER,
+                to=recipient.strip(),
+                body=response
+            )
+
     return str(twilio_response)
 
-
+# ------------------------------------------------------------
+# 💬 Telegram route (optional)
+# ------------------------------------------------------------
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
     if generator is None:
         load_model()
+
     data = request.json
     message = data.get("message", {}).get("text", "")
     chat_id = data.get("message", {}).get("chat", {}).get("id", "")
+
     if not message:
         return "OK"
+
     response = generator(
         message,
         max_length=60,
@@ -96,19 +128,22 @@ def telegram_webhook():
         temperature=0.9,
         num_return_sequences=1
     )[0]['generated_text']
-    print(f"[Telegram] Gebruiker zei: {message}")
-    print(f"[Telegram] Bot antwoordt: {response}")
+
     telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": response}
     requests.post(telegram_url, json=payload)
     return "OK"
 
-
+# ------------------------------------------------------------
+# 🌍 Health check
+# ------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"status": "ok", "message": "🚂 SolarBot is alive!"}), 200
 
-
+# ------------------------------------------------------------
+# 🚀 Entry point (for local or gunicorn)
+# ------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"[INFO] Starting Flask server locally on port {port} ...")
