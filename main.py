@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from flask import Flask, request
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
@@ -9,9 +10,10 @@ from twilio.twiml.messaging_response import MessagingResponse
 # ------------------------------------------------------------
 app = Flask(__name__)
 print("[BOOT] Flask app initialized, waiting for requests...")
+time.sleep(3)  # ⏳ geef Railway even tijd voor de healthcheck
 
 # ------------------------------------------------------------
-# 🧠 MODEL CONFIG (lazy load, nothing heavy at import time)
+# 🧠 MODEL CONFIG (lazy load)
 # ------------------------------------------------------------
 MODEL_PATH = os.getenv("MODEL_PATH", "microsoft/DialoGPT-medium")
 tokenizer = None
@@ -59,6 +61,7 @@ def whatsapp_reply():
         num_return_sequences=1
     )[0]['generated_text']
 
+    print(f"[WhatsApp] Antwoord: {response}")
     twilio_response = MessagingResponse()
     twilio_response.message(response)
     return str(twilio_response)
@@ -92,6 +95,8 @@ def telegram_webhook():
         num_return_sequences=1
     )[0]['generated_text']
 
+    print(f"[Telegram] Gebruiker zei: {message}")
+    print(f"[Telegram] Bot antwoordt: {response}")
     telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": response}
     requests.post(telegram_url, json=payload)
