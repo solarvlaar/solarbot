@@ -135,7 +135,7 @@ def telegram_webhook():
 # ------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({"status": "ok", "message": "🚂 SolarBot is alive!"}), 200
+    return "ok", 200
 
 # ------------------------------------------------------------
 # 🚀 Entry point (for local or gunicorn)
