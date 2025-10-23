@@ -135,6 +135,7 @@ def telegram_webhook():
 # ------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def home():
+    print("[HEALTHCHECK] Received health check ping ✅")
     return "ok", 200
 
 # ------------------------------------------------------------
