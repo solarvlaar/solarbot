@@ -9,24 +9,9 @@ from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 
 # ------------------------------------------------------------
-# 🚂 Initialize Flask before heavy modules
+# 🚂 Initialize Flask
 # ------------------------------------------------------------
 app = Flask(__name__)
-
-def startup_ping():
-    """Ping de healthcheck zodat Railway weet dat de server leeft."""
-    time.sleep(3)
-    try:
-        print("[BOOT] Sending self-ping to health endpoint...")
-        requests.get("http://0.0.0.0:" + os.environ.get("PORT", "5000"))
-    except Exception as e:
-        print(f"[BOOT] Ping failed (but it's fine): {e}")
-
-# Start de ping in een aparte thread
-threading.Thread(target=startup_ping, daemon=True).start()
-
-print("[BOOT] Initializing Flask app ...")
-time.sleep(5)
 print("[BOOT] Flask app initialized, waiting for requests...")
 print("[BOOT] Python version:", sys.version)
 
@@ -103,7 +88,7 @@ def whatsapp_reply():
     return str(twilio_response)
 
 # ------------------------------------------------------------
-# 💬 Telegram route (optional)
+# 💬 Telegram route (async reply)
 # ------------------------------------------------------------
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
@@ -112,27 +97,38 @@ def telegram_webhook():
     if generator is None:
         load_model()
 
-    data = request.json
-    message = data.get("message", {}).get("text", "")
-    chat_id = data.get("message", {}).get("chat", {}).get("id", "")
+    data = request.get_json(force=True)
+    message = data.get("message", {}).get("text")
+    chat_id = data.get("message", {}).get("chat", {}).get("id")
 
-    if not message:
-        return "OK"
+    if not message or not chat_id:
+        return jsonify({"status": "ignored"}), 200
 
-    response = generator(
-        message,
-        max_length=60,
-        do_sample=True,
-        top_k=50,
-        top_p=0.95,
-        temperature=0.9,
-        num_return_sequences=1
-    )[0]['generated_text']
+    print(f"[Telegram] Gebruiker zei: {message}")
 
-    telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": response}
-    requests.post(telegram_url, json=payload)
-    return "OK"
+    def send_reply():
+        try:
+            response = generator(
+                message,
+                max_length=60,
+                do_sample=True,
+                top_k=50,
+                top_p=0.95,
+                temperature=0.9,
+                num_return_sequences=1
+            )[0]['generated_text']
+
+            print(f"[Telegram] Bot antwoordt: {response}")
+
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={"chat_id": chat_id, "text": response}
+            )
+        except Exception as e:
+            print(f"[ERROR] Telegram-fout: {e}")
+
+    threading.Thread(target=send_reply, daemon=True).start()
+    return jsonify({"status": "ok"}), 200
 
 # ------------------------------------------------------------
 # 🌍 Health check
