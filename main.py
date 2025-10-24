@@ -135,7 +135,27 @@ def telegram_webhook():
 def home():
     print("[HEALTHCHECK] Received health check ping ✅")
     return "ok", 200
+# ------------------------------------------------------------
+# 🕒 Prevent Railway from killing the app too early
+# ------------------------------------------------------------
+import atexit
+import threading
 
+def keepalive():
+    """Houd de app actief zodat Railway hem niet afsluit."""
+    def ping_loop():
+        while True:
+            try:
+                requests.get("http://0.0.0.0:" + os.environ.get("PORT", "5000"))
+            except Exception:
+                pass
+            time.sleep(25)  # elke 25 seconden ping
+    thread = threading.Thread(target=ping_loop, daemon=True)
+    thread.start()
+
+# Start keepalive zodra Flask geladen is
+atexit.register(lambda: print("[KEEPALIVE] Flask shutting down gracefully."))
+keepalive()
 # ------------------------------------------------------------
 # 🚀 Entry point (for local or gunicorn)
 # ------------------------------------------------------------
