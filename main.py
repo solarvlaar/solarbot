@@ -137,26 +137,29 @@ def home():
     print("[HEALTHCHECK] Received health check ping ✅")
     return "ok", 200
 # ------------------------------------------------------------
-# 🕒 Prevent Railway from killing the app too early
+# 🕒 Persistent Keepalive Fix (Railway-safe)
 # ------------------------------------------------------------
 import atexit
 import threading
+import time
+import requests
 
-def keepalive():
-    """Houd de app actief zodat Railway hem niet afsluit."""
-    def ping_loop():
-        while True:
-            try:
-                requests.get("http://0.0.0.0:" + os.environ.get("PORT", "5000"))
-            except Exception:
-                pass
-            time.sleep(25)  # elke 25 seconden ping
-    thread = threading.Thread(target=ping_loop, daemon=True)
-    thread.start()
+def keepalive_forever():
+    """Houd de app actief door zichzelf periodiek te pingen."""
+    while True:
+        try:
+            port = os.environ.get("PORT", "5000")
+            url = f"http://127.0.0.1:{port}/"
+            requests.get(url, timeout=5)
+            print("[KEEPALIVE] Self-ping sent ✅")
+        except Exception as e:
+            print(f"[KEEPALIVE] Ping failed: {e}")
+        time.sleep(20)  # elke 20 seconden
 
-# Start keepalive zodra Flask geladen is
+# Start direct bij import
+threading.Thread(target=keepalive_forever, daemon=True).start()
 atexit.register(lambda: print("[KEEPALIVE] Flask shutting down gracefully."))
-keepalive()
+
 # ------------------------------------------------------------
 # 🚀 Entry point (for local or gunicorn)
 # ------------------------------------------------------------
