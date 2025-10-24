@@ -1,7 +1,5 @@
 import os
 import sys
-import time
-import threading
 import requests
 from flask import Flask, request, jsonify
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
@@ -9,7 +7,7 @@ from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 
 # ------------------------------------------------------------
-# 🚂 Initialize Flask
+# 🚂 Initialize Flask before heavy modules
 # ------------------------------------------------------------
 app = Flask(__name__)
 print("[BOOT] Flask app initialized, waiting for requests...")
