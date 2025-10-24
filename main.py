@@ -160,6 +160,13 @@ def keepalive_forever():
 threading.Thread(target=keepalive_forever, daemon=True).start()
 atexit.register(lambda: print("[KEEPALIVE] Flask shutting down gracefully."))
 
+@app.before_first_request
+def delay_healthcheck():
+    """Voorkomt dat Railway de healthcheck te vroeg uitvoert."""
+    import time
+    print("[BOOT] Delaying healthcheck for 10 seconds...")
+    time.sleep(10)
+
 # ------------------------------------------------------------
 # 🚀 Entry point (for local or gunicorn)
 # ------------------------------------------------------------
