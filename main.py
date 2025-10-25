@@ -113,36 +113,44 @@ def send_reply():
 # ------------------------------------------------------------
 # 💬 Telegram webhook
 # ------------------------------------------------------------
+# ------------------------------------------------------------
+# 💬 Telegram config + auto-webhook herstel
+# ------------------------------------------------------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+WEBHOOK_URL = "https://solarbot.up.railway.app/telegram"
 
-# ------------------------------------------------------------
-# 🛰️ Auto-set Telegram webhook bij opstart
-# ------------------------------------------------------------
 def ensure_webhook():
-    """Controleer of Telegram webhook goed is ingesteld, anders zet 'm opnieuw."""
+    """Controleert periodiek of de Telegram webhook nog goed staat."""
     if not TELEGRAM_TOKEN:
-        print("[TELEGRAM] Geen token gevonden — webhook wordt niet gezet.")
+        print("[TELEGRAM] ⚠️ Geen token gevonden, webhook wordt niet gezet.")
         return
-    try:
-        webhook_url = f"https://solarbot.up.railway.app/telegram"
-        info_url = f"https://api.telegram.org/bot8144901485:AAFAKRW937a162xycAVna_CHE4S-shcv5JA/getWebhookInfo"
-        set_url = f"https://api.telegram.org/bot8144901485:AAFAKRW937a162xycAVna_CHE4S-shcv5JA/setWebhook?url={webhook_url}"
+    while True:
+        try:
+            info_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getWebhookInfo"
+            set_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={WEBHOOK_URL}"
+            info = requests.get(info_url, timeout=10).json()
 
-        info = requests.get(info_url, timeout=5).json()
-        current = info.get("result", {}).get("url", "")
-        if current != webhook_url:
-            r = requests.get(set_url, timeout=5).json()
-            print(f"[TELEGRAM] Webhook reset: {r}")
-        else:
-            print("[TELEGRAM] Webhook al correct ingesteld.")
-    except Exception as e:
-        print(f"[TELEGRAM] Fout bij instellen webhook: {e}")
+            if not info.get("ok"):
+                print(f"[TELEGRAM] ❌ getWebhookInfo mislukt: {info}")
+            else:
+                current = info.get("result", {}).get("url", "")
+                if current != WEBHOOK_URL:
+                    r = requests.get(set_url, timeout=10).json()
+                    print(f"[TELEGRAM] 🔄 Webhook opnieuw gezet: {r}")
+                else:
+                    print("[TELEGRAM] ✅ Webhook is nog actief.")
+        except Exception as e:
+            print(f"[TELEGRAM] ⚠️ Fout bij webhook-check: {e}")
 
-# Zet de webhook zodra de server start
+        time.sleep(300)  # check elke 5 minuten
+
 threading.Thread(target=ensure_webhook, daemon=True).start()
 
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
+    if generator is None:
+        load_model()
+
     data = request.get_json(force=True)
     message = data.get("message", {}).get("text")
     chat_id = data.get("message", {}).get("chat", {}).get("id")
@@ -152,19 +160,30 @@ def telegram_webhook():
 
     print(f"[Telegram] Gebruiker zei: {message}")
 
-    def send_reply():
-        try:
-            reply = generate_response(message)
-            print(f"[Telegram] Bot antwoordt: {reply}")
-            requests.post(
-                f"https://api.telegram.org/bot8144901485:AAFAKRW937a162xycAVna_CHE4S-shcv5JA/sendMessage",
-                json={"chat_id": chat_id, "text": reply},
-            )
-        except Exception as e:
-            print(f"[ERROR] Telegram-fout: {e}")
+    try:
+        response = generator(
+            message,
+            max_length=60,
+            do_sample=True,
+            top_k=50,
+            top_p=0.95,
+            temperature=0.9,
+            truncation=True,
+            num_return_sequences=1
+        )[0]['generated_text'].strip()
 
-    threading.Thread(target=send_reply, daemon=True).start()
+        if not response:
+            response = "..."
+
+        print(f"[Telegram] Bot antwoordt: {response}")
+
+        send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(send_url, json={"chat_id": chat_id, "text": response})
+    except Exception as e:
+        print(f"[ERROR] Telegram-fout: {e}")
+
     return jsonify({"status": "ok"}), 200
+
 
 # ------------------------------------------------------------
 # 💬 WhatsApp (Twilio)
