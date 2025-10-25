@@ -18,10 +18,10 @@ print("[BOOT] Python version:", sys.version)
 # ------------------------------------------------------------
 # 🌍 Global readiness flag
 # ------------------------------------------------------------
-READY = False  # wordt pas True zodra het model geladen is
+READY = False  # wordt True zodra het model klaar is
 
 # ------------------------------------------------------------
-# 🧠 MODEL CONFIG (lazy load)
+# 🧠 MODEL CONFIG
 # ------------------------------------------------------------
 MODEL_PATH = os.getenv("MODEL_PATH", "microsoft/DialoGPT-medium")
 tokenizer = None
@@ -29,30 +29,31 @@ model = None
 generator = None
 
 def load_model():
-    """Laadt het model pas bij eerste gebruik (lazy load)."""
+    """Laadt het model en zet READY op True."""
     global tokenizer, model, generator, READY
-    if generator is None:
-        try:
-            print(f"[INFO] 📦 Loading model: {MODEL_PATH} ...")
-            tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-            model = AutoModelForCausalLM.from_pretrained(MODEL_PATH)
-            generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
-            READY = True
-            print("[INFO] ✅ Model loaded and ready.")
-        except Exception as e:
-            print(f"[WARN] Kon model niet laden ({e}), gebruik fallback DialoGPT-small.")
-            tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-small")
-            model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-small")
-            generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
-            READY = True
-            print("[INFO] ✅ Fallback model loaded.")
+    if generator is not None:
+        return
+    try:
+        print(f"[INFO] 📦 Loading model: {MODEL_PATH} ...")
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+        model = AutoModelForCausalLM.from_pretrained(MODEL_PATH)
+        generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
+        READY = True
+        print("[INFO] ✅ Model loaded and ready.")
+    except Exception as e:
+        print(f"[WARN] Kon model niet laden ({e}), gebruik fallback DialoGPT-small.")
+        tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-small")
+        model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-small")
+        generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
+        READY = True
+        print("[INFO] ✅ Fallback model loaded.")
 
 # ------------------------------------------------------------
-# 📱 Twilio config via environment variables
+# 📱 Twilio config
 # ------------------------------------------------------------
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")  # e.g. whatsapp:+15558665761
+TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 RECIPIENT_NUMBERS = os.getenv("RECIPIENT_NUMBERS", "").split(",")
 
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -62,7 +63,7 @@ client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 # ------------------------------------------------------------
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_reply():
-    if generator is None:
+    if not READY:
         load_model()
 
     incoming_msg = request.values.get("Body", "")
@@ -96,10 +97,11 @@ def whatsapp_reply():
 # 💬 Telegram route
 # ------------------------------------------------------------
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+RAILWAY_URL = os.environ.get("RAILWAY_URL", "https://solarbot.up.railway.app")
 
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
-    if generator is None:
+    if not READY:
         load_model()
 
     data = request.get_json(force=True)
@@ -128,7 +130,6 @@ def telegram_webhook():
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json={"chat_id": chat_id, "text": response}
         )
-
     except Exception as e:
         print(f"[ERROR] Telegram-fout: {e}")
 
@@ -139,7 +140,6 @@ def telegram_webhook():
 # ------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def home():
-    global READY
     if not READY:
         print("[HEALTHCHECK] App not ready yet ❌")
         return "initializing...", 503
@@ -147,7 +147,7 @@ def home():
     return "ok", 200
 
 # ------------------------------------------------------------
-# 🕒 Persistent Keepalive (voorkomt slaapstand)
+# 🕒 Persistent Keepalive
 # ------------------------------------------------------------
 def keepalive_forever():
     """Houd de app actief door zichzelf periodiek te pingen."""
@@ -164,11 +164,33 @@ def keepalive_forever():
 threading.Thread(target=keepalive_forever, daemon=True).start()
 
 # ------------------------------------------------------------
-# 🚀 Entry point (for local or gunicorn)
+# 🔁 Webhook auto-check (herstel bij 404)
+# ------------------------------------------------------------
+def check_webhook_periodically():
+    """Controleer en herstel Telegram-webhook elk uur."""
+    while True:
+        try:
+            info = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getWebhookInfo").json()
+            if not info.get("ok") or info["result"].get("url") != f"{RAILWAY_URL}/telegram":
+                print("[TELEGRAM] ⚠️ Webhook was niet actief, opnieuw instellen...")
+                set_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook"
+                data = {"url": f"{RAILWAY_URL}/telegram"}
+                resp = requests.post(set_url, data=data)
+                print(f"[TELEGRAM] Webhook reset: {resp.text}")
+            else:
+                print("[TELEGRAM] ✅ Webhook is nog actief.")
+        except Exception as e:
+            print(f"[TELEGRAM] ❌ Webhook check failed: {e}")
+        time.sleep(3600)  # 1 uur
+
+threading.Thread(target=check_webhook_periodically, daemon=True).start()
+
+# ------------------------------------------------------------
+# 🚀 Entry point
 # ------------------------------------------------------------
 if __name__ == "__main__":
     print("[BOOT] Initializing model environment...")
-    time.sleep(15)  # extra delay voor Railway healthcheck
+    load_model()  # <-- 👈 Model direct bij startup laden
     port = int(os.environ.get("PORT", 5000))
     print(f"[INFO] Starting Flask server locally on port {port} ...")
     app.run(host="0.0.0.0", port=port)
