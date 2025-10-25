@@ -1,109 +1,97 @@
 import os
 import sys
+import re
+import random
 import time
 import threading
 import requests
 from flask import Flask, request, jsonify
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
-import atexit
 
 # ------------------------------------------------------------
-# 🧩 Fix voor Gunicorn + Gevent
-# ------------------------------------------------------------
-from gevent import monkey
-monkey.patch_all()  # voorkomt thread-conflicten bij startup
-
-# ------------------------------------------------------------
-# 🚂 Initialize Flask
+# 🚂 Flask setup
 # ------------------------------------------------------------
 app = Flask(__name__)
 print("[BOOT] Flask app initialized, waiting for requests...")
 print("[BOOT] Python version:", sys.version)
 
 # ------------------------------------------------------------
-# 🧠 MODEL CONFIG (lazy load)
+# 🧠 MODEL CONFIG
 # ------------------------------------------------------------
 MODEL_PATH = os.getenv("MODEL_PATH", "microsoft/DialoGPT-medium")
+device = "cpu"
 tokenizer = None
 model = None
-generator = None
-
 
 def load_model():
-    """Laadt het model pas bij eerste gebruik (lazy load)."""
-    global tokenizer, model, generator
-    if generator is None:
+    global tokenizer, model
+    if model is None or tokenizer is None:
         try:
             print(f"[INFO] 📦 Loading model: {MODEL_PATH} ...")
             tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
             model = AutoModelForCausalLM.from_pretrained(MODEL_PATH)
-            generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
             print("[INFO] ✅ Model loaded successfully.")
         except Exception as e:
             print(f"[WARN] Kon model niet laden ({e}), gebruik fallback DialoGPT-small.")
             tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-small")
             model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-small")
-            generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
             print("[INFO] ✅ Fallback model loaded.")
 
 # ------------------------------------------------------------
-# 📱 Twilio Config
+# 🚫 Naamfilter + responslogica
 # ------------------------------------------------------------
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")  # e.g. whatsapp:+15558665761
-RECIPIENT_NUMBERS = os.getenv("RECIPIENT_NUMBERS", "").split(",")
+def bevat_voornaam(tekst):
+    """Detecteer hoofdletter-namen zonder leestekens ervoor."""
+    return bool(re.search(r"(?:^|[\s,;])([A-Z][a-z]{2,})", tekst))
 
-client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-
-# ------------------------------------------------------------
-# 💬 WhatsApp route
-# ------------------------------------------------------------
-@app.route("/whatsapp", methods=["POST"])
-def whatsapp_reply():
-    if generator is None:
+def generate_response(prompt):
+    """Genereer korte, natuurlijke antwoorden zonder namen."""
+    if model is None or tokenizer is None:
         load_model()
 
-    incoming_msg = request.values.get("Body", "")
-    from_number = request.values.get("From", "")
-    print(f"[WhatsApp] Van {from_number}: {incoming_msg}")
+    input_text = f"<|prompter|>\n{prompt}\n<|responder|>\n"
+    input_ids = tokenizer.encode(input_text, return_tensors="pt")
 
-    response = generator(
-        incoming_msg,
-        max_length=60,
-        do_sample=True,
-        top_k=50,
-        top_p=0.95,
-        temperature=0.9,
-        num_return_sequences=1
-    )[0]['generated_text']
+    stijl = random.choices(["kort", "middel", "lang"], weights=[0.85, 0.12, 0.03])[0]
+    if stijl == "kort":
+        max_len = input_ids.shape[1] + random.randint(5, 20)
+        temp = 0.5
+    elif stijl == "middel":
+        max_len = input_ids.shape[1] + random.randint(25, 40)
+        temp = 0.7
+    else:
+        max_len = input_ids.shape[1] + random.randint(50, 80)
+        temp = 0.85
 
-    twilio_response = MessagingResponse()
-    twilio_response.message(response)
+    for _ in range(5):  # probeer tot 5x zonder naam
+        output_ids = model.generate(
+            input_ids,
+            max_length=max_len,
+            do_sample=True,
+            temperature=temp,
+            top_k=50,
+            top_p=0.9,
+            repetition_penalty=1.3,
+            pad_token_id=tokenizer.eos_token_id,
+        )
 
-    # Eventueel pushbericht terugsturen via Twilio REST API
-    for recipient in RECIPIENT_NUMBERS:
-        if recipient.strip():
-            client.messages.create(
-                from_=TWILIO_PHONE_NUMBER,
-                to=recipient.strip(),
-                body=response
-            )
+        generated_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        response = generated_text.split("<|responder|>\n")[-1].strip()
 
-    return str(twilio_response)
+        if not bevat_voornaam(response):
+            return response[:500]
+
+    return "..."
 
 # ------------------------------------------------------------
-# 💬 Telegram route (async reply)
+# 💬 Telegram webhook
 # ------------------------------------------------------------
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
-    if generator is None:
-        load_model()
-
     data = request.get_json(force=True)
     message = data.get("message", {}).get("text")
     chat_id = data.get("message", {}).get("chat", {}).get("id")
@@ -115,21 +103,11 @@ def telegram_webhook():
 
     def send_reply():
         try:
-            response = generator(
-                message,
-                max_length=60,
-                do_sample=True,
-                top_k=50,
-                top_p=0.95,
-                temperature=0.9,
-                num_return_sequences=1
-            )[0]['generated_text']
-
-            print(f"[Telegram] Bot antwoordt: {response}")
-
+            reply = generate_response(message)
+            print(f"[Telegram] Bot antwoordt: {reply}")
             requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                json={"chat_id": chat_id, "text": response}
+                json={"chat_id": chat_id, "text": reply},
             )
         except Exception as e:
             print(f"[ERROR] Telegram-fout: {e}")
@@ -138,7 +116,37 @@ def telegram_webhook():
     return jsonify({"status": "ok"}), 200
 
 # ------------------------------------------------------------
-# 🌍 Health check
+# 💬 WhatsApp (Twilio)
+# ------------------------------------------------------------
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
+RECIPIENT_NUMBERS = os.getenv("RECIPIENT_NUMBERS", "").split(",")
+
+client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+@app.route("/whatsapp", methods=["POST"])
+def whatsapp_reply():
+    incoming_msg = request.values.get("Body", "")
+    from_number = request.values.get("From", "")
+    print(f"[WhatsApp] Van {from_number}: {incoming_msg}")
+    reply = generate_response(incoming_msg)
+
+    twilio_response = MessagingResponse()
+    twilio_response.message(reply)
+
+    for recipient in RECIPIENT_NUMBERS:
+        if recipient.strip():
+            client.messages.create(
+                from_=TWILIO_PHONE_NUMBER,
+                to=recipient.strip(),
+                body=reply,
+            )
+
+    return str(twilio_response)
+
+# ------------------------------------------------------------
+# 🌍 Healthcheck
 # ------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def home():
@@ -146,34 +154,25 @@ def home():
     return "ok", 200
 
 # ------------------------------------------------------------
-# 🕒 Persistent Keepalive + Startup Delay
+# 🔁 Keepalive (Railway persistent fix)
 # ------------------------------------------------------------
+import atexit
 def keepalive_forever():
-    """Houd de app actief door zichzelf periodiek te pingen."""
     while True:
         try:
             port = os.environ.get("PORT", "5000")
-            url = f"http://127.0.0.1:{port}/"
-            requests.get(url, timeout=5)
+            requests.get(f"http://127.0.0.1:{port}/", timeout=5)
             print("[KEEPALIVE] Self-ping sent ✅")
         except Exception as e:
             print(f"[KEEPALIVE] Ping failed: {e}")
         time.sleep(20)
 
-def startup_delay():
-    """Voorkomt dat Railway de healthcheck te vroeg uitvoert."""
-    print("[BOOT] Delaying healthcheck for 10 seconds...")
-    time.sleep(10)
-
-# Start beide in achtergrondthreads
-threading.Thread(target=startup_delay, daemon=True).start()
 threading.Thread(target=keepalive_forever, daemon=True).start()
 atexit.register(lambda: print("[KEEPALIVE] Flask shutting down gracefully."))
 
 # ------------------------------------------------------------
-# 🚀 Entry point (for local or gunicorn)
+# 🚀 Start server
 # ------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"[INFO] Starting Flask server locally on port {port} ...")
     app.run(host="0.0.0.0", port=port)
