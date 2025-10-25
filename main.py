@@ -146,7 +146,7 @@ def home():
     return "ok", 200
 
 # ------------------------------------------------------------
-# 🕒 Persistent Keepalive + Healthcheck delay
+# 🕒 Persistent Keepalive + Startup Delay
 # ------------------------------------------------------------
 def keepalive_forever():
     """Houd de app actief door zichzelf periodiek te pingen."""
@@ -160,12 +160,13 @@ def keepalive_forever():
             print(f"[KEEPALIVE] Ping failed: {e}")
         time.sleep(20)
 
-@app.before_first_request
-def delay_healthcheck():
+def startup_delay():
     """Voorkomt dat Railway de healthcheck te vroeg uitvoert."""
     print("[BOOT] Delaying healthcheck for 10 seconds...")
     time.sleep(10)
 
+# Start beide in achtergrondthreads
+threading.Thread(target=startup_delay, daemon=True).start()
 threading.Thread(target=keepalive_forever, daemon=True).start()
 atexit.register(lambda: print("[KEEPALIVE] Flask shutting down gracefully."))
 
