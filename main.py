@@ -163,6 +163,9 @@ threading.Thread(target=check_webhook_periodically, daemon=True).start()
 # 🚀 Entry point
 # ------------------------------------------------------------
 if __name__ == "__main__":
+    print("[BOOT] Waiting 5 seconds before starting Flask (Railway delay fix)...")
+    time.sleep(5)  # 👈 laat Railway even ademen
     port = int(os.environ.get("PORT", 5000))
     print(f"[INFO] Starting Flask server on port {port} ...")
     app.run(host="0.0.0.0", port=port)
+
