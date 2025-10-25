@@ -1,12 +1,12 @@
 import os
 import sys
-import re
 import time
 import random
+import re
 import threading
 import requests
 from flask import Flask, request, jsonify
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 
 # ------------------------------------------------------------
@@ -17,24 +17,33 @@ print("[BOOT] Flask app initialized, waiting for requests...")
 print("[BOOT] Python version:", sys.version)
 
 # ------------------------------------------------------------
-# 🧠 Model config (uses your own fine-tuned model)
+# ⚙️ MODEL CONFIG
 # ------------------------------------------------------------
 MODEL_PATH = os.getenv("MODEL_PATH", "microsoft/DialoGPT-medium")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 tokenizer = None
 model = None
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-def bevat_voornaam(tekst):
-    return bool(re.search(r"(?:^|[\s,;])([A-Z][a-z]{2,})", tekst))
 
 def load_model():
-    """Lazy load van model"""
+    """Laadt het model slechts één keer (lazy load)."""
     global tokenizer, model
     if model is None or tokenizer is None:
-        print(f"[INFO] 📦 Loading model: {MODEL_PATH}")
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-        model = AutoModelForCausalLM.from_pretrained(MODEL_PATH).to(device)
-        print("[INFO] ✅ Model loaded and ready.")
+        try:
+            print(f"[INFO] 📦 Loading model: {MODEL_PATH} ...")
+            tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+            model = AutoModelForCausalLM.from_pretrained(MODEL_PATH).to(device)
+            print("[INFO] ✅ Model loaded and ready.")
+        except Exception as e:
+            print(f"[WARN] Kon model niet laden ({e}), gebruik fallback small model.")
+            tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-small")
+            model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-small").to(device)
+
+# ------------------------------------------------------------
+# 🧩 Helperfuncties
+# ------------------------------------------------------------
+def bevat_voornaam(tekst):
+    """Detecteer voornamen of hoofdletterwoorden."""
+    return bool(re.search(r"(?:^|[\s,;])([A-Z][a-z]{2,})", tekst))
 
 def generate_response(prompt):
     """Genereer korte, natuurlijke antwoorden zonder namen."""
@@ -42,7 +51,12 @@ def generate_response(prompt):
         load_model()
 
     input_text = f"<|prompter|>\n{prompt}\n<|responder|>\n"
-    input_ids = tokenizer.encode(input_text, return_tensors="pt").to(device)
+    input_ids = tokenizer.encode(
+        input_text,
+        return_tensors="pt",
+        truncation=True,
+        max_length=512
+    ).to(device)
 
     stijl = random.choices(["kort", "middel", "lang"], weights=[0.85, 0.12, 0.03])[0]
     if stijl == "kort":
@@ -64,8 +78,7 @@ def generate_response(prompt):
             top_k=50,
             top_p=0.9,
             repetition_penalty=1.3,
-            pad_token_id=tokenizer.eos_token_id,
-            truncation=True
+            pad_token_id=tokenizer.eos_token_id
         )
         generated_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         response = generated_text.split("<|responder|>\n")[-1].strip()
@@ -75,10 +88,10 @@ def generate_response(prompt):
     return "..."
 
 # ------------------------------------------------------------
-# 💬 Telegram webhook
+# 💬 TELEGRAM WEBHOOK
 # ------------------------------------------------------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-BOT_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+RAILWAY_URL = os.getenv("RAILWAY_PUBLIC_URL", "https://solarbot.up.railway.app")
 
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
@@ -96,12 +109,11 @@ def telegram_webhook():
 
     try:
         requests.post(
-            f"{BOT_URL}/sendMessage",
-            json={"chat_id": chat_id, "text": response},
-            timeout=10
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": response}
         )
     except Exception as e:
-        print(f"[ERROR] Telegram-send failed: {e}")
+        print(f"[ERROR] Telegram-fout: {e}")
 
     return jsonify({"status": "ok"}), 200
 
@@ -111,44 +123,56 @@ def telegram_webhook():
 @app.route("/", methods=["GET"])
 def home():
     print("[HEALTHCHECK] Received health check ping ✅")
-    return jsonify({"status": "ok"}), 200
+    return "ok", 200
 
 # ------------------------------------------------------------
-# 🕒 Keepalive & Auto-Webhook Fix
+# 🔁 Periodieke Telegram-webhook check
 # ------------------------------------------------------------
-def keepalive():
-    port = os.environ.get("PORT", "5000")
-    url = f"http://127.0.0.1:{port}/"
-    while True:
-        try:
-            requests.get(url, timeout=5)
-            print("[KEEPALIVE] Self-ping sent ✅")
-        except:
-            pass
-        time.sleep(25)
-
 def ensure_webhook():
-    """Controleert of de webhook actief is en herstelt indien nodig."""
+    """Controleert of de webhook actief is en herstelt hem indien nodig."""
     try:
-        info = requests.get(f"{BOT_URL}/getWebhookInfo", timeout=10).json()
-        if not info.get("result", {}).get("url"):
-            webhook_url = "https://solarbot.up.railway.app/telegram"
-            set_hook = requests.get(f"{BOT_URL}/setWebhook?url={webhook_url}").json()
-            if set_hook.get("ok"):
-                print(f"[TELEGRAM] ✅ Webhook hersteld: {webhook_url}")
-            else:
-                print("[TELEGRAM] ⚠️ Webhook kon niet gezet worden.")
+        info = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getWebhookInfo").json()
+        url = info.get("result", {}).get("url", "")
+        if RAILWAY_URL not in url:
+            print("[TELEGRAM] ⚠️ Webhook incorrect, opnieuw instellen...")
+            resp = requests.get(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook",
+                params={"url": f"{RAILWAY_URL}/telegram"}
+            )
+            print(f"[TELEGRAM] 🔁 Webhook reset result: {resp.text}")
         else:
             print("[TELEGRAM] ✅ Webhook is nog actief.")
     except Exception as e:
-        print(f"[TELEGRAM] ❌ Webhook check failed: {e}")
+        print(f"[TELEGRAM] ❌ Fout bij webhook-check: {e}")
 
-threading.Thread(target=keepalive, daemon=True).start()
-threading.Thread(target=ensure_webhook, daemon=True).start()
+def webhook_loop():
+    """Controleert elke 10 minuten of de webhook nog actief is."""
+    while True:
+        ensure_webhook()
+        time.sleep(600)
+
+threading.Thread(target=webhook_loop, daemon=True).start()
 
 # ------------------------------------------------------------
-# 🚀 Entry point
+# 🕒 Keepalive tegen Railway timeouts
+# ------------------------------------------------------------
+def keepalive_forever():
+    """Ping zichzelf om wakker te blijven."""
+    while True:
+        try:
+            requests.get(f"http://127.0.0.1:{os.environ.get('PORT', '5000')}/", timeout=5)
+            print("[KEEPALIVE] Self-ping sent ✅")
+        except Exception:
+            pass
+        time.sleep(30)
+
+threading.Thread(target=keepalive_forever, daemon=True).start()
+
+# ------------------------------------------------------------
+# 🚀 Start
 # ------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
+    print(f"[INFO] Starting Flask server locally on port {port} ...")
+    ensure_webhook()
     app.run(host="0.0.0.0", port=port)
