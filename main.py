@@ -47,7 +47,8 @@ def bevat_voornaam(tekst):
     return bool(re.search(r"(?:^|[\s,;])([A-Z][a-z]{2,})", tekst))
 
 def generate_response(prompt):
-    """Genereer korte, natuurlijke antwoorden zonder namen."""
+    """Genereer korte, natuurlijke antwoorden zonder namen of herhaling."""
+    global model, tokenizer
     if model is None or tokenizer is None:
         load_model()
 
@@ -57,15 +58,15 @@ def generate_response(prompt):
     stijl = random.choices(["kort", "middel", "lang"], weights=[0.85, 0.12, 0.03])[0]
     if stijl == "kort":
         max_len = input_ids.shape[1] + random.randint(5, 20)
-        temp = 0.5
+        temp = 0.6
     elif stijl == "middel":
         max_len = input_ids.shape[1] + random.randint(25, 40)
-        temp = 0.7
+        temp = 0.75
     else:
         max_len = input_ids.shape[1] + random.randint(50, 80)
-        temp = 0.85
+        temp = 0.9
 
-    for _ in range(5):  # probeer tot 5x zonder naam
+    for _ in range(5):
         output_ids = model.generate(
             input_ids,
             max_length=max_len,
@@ -80,10 +81,34 @@ def generate_response(prompt):
         generated_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         response = generated_text.split("<|responder|>\n")[-1].strip()
 
-        if not bevat_voornaam(response):
-            return response[:500]
+        # filter leeg, echo, of namen
+        if not response or response.lower() == prompt.lower() or bevat_voornaam(response):
+            continue
+        return response[:500]
 
-    return "..."
+    return random.choice(["hmm...", "geen idee", "misschien", "🤔"])
+
+
+def send_reply():
+    try:
+        reply = generate_response(message)
+        print(f"[Telegram] Bot antwoordt: {reply}")
+
+        # afhandelen van tijdelijke SSL-fouten met retry
+        for _ in range(3):
+            try:
+                r = requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    json={"chat_id": chat_id, "text": reply},
+                    timeout=5
+                )
+                if r.status_code == 200:
+                    break
+            except requests.exceptions.SSLError:
+                print("[WARN] SSL error, retrying...")
+                time.sleep(1)
+    except Exception as e:
+        print(f"[ERROR] Telegram-fout: {e}")
 
 # ------------------------------------------------------------
 # 💬 Telegram webhook
