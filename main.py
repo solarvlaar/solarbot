@@ -1,14 +1,22 @@
 import os
 import sys
-import requests
 import time
+import threading
+import requests
 from flask import Flask, request, jsonify
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
+import atexit
 
 # ------------------------------------------------------------
-# 🚂 Initialize Flask before heavy modules
+# 🧩 Fix voor Gunicorn + Gevent
+# ------------------------------------------------------------
+from gevent import monkey
+monkey.patch_all()  # voorkomt thread-conflicten bij startup
+
+# ------------------------------------------------------------
+# 🚂 Initialize Flask
 # ------------------------------------------------------------
 app = Flask(__name__)
 print("[BOOT] Flask app initialized, waiting for requests...")
@@ -21,6 +29,7 @@ MODEL_PATH = os.getenv("MODEL_PATH", "microsoft/DialoGPT-medium")
 tokenizer = None
 model = None
 generator = None
+
 
 def load_model():
     """Laadt het model pas bij eerste gebruik (lazy load)."""
@@ -40,7 +49,7 @@ def load_model():
             print("[INFO] ✅ Fallback model loaded.")
 
 # ------------------------------------------------------------
-# 📱 Twilio config via environment variables
+# 📱 Twilio Config
 # ------------------------------------------------------------
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
@@ -71,7 +80,6 @@ def whatsapp_reply():
         num_return_sequences=1
     )[0]['generated_text']
 
-    # Twilio webhook reply
     twilio_response = MessagingResponse()
     twilio_response.message(response)
 
@@ -136,14 +144,10 @@ def telegram_webhook():
 def home():
     print("[HEALTHCHECK] Received health check ping ✅")
     return "ok", 200
-# ------------------------------------------------------------
-# 🕒 Persistent Keepalive Fix (Railway-safe)
-# ------------------------------------------------------------
-import atexit
-import threading
-import time
-import requests
 
+# ------------------------------------------------------------
+# 🕒 Persistent Keepalive + Healthcheck delay
+# ------------------------------------------------------------
 def keepalive_forever():
     """Houd de app actief door zichzelf periodiek te pingen."""
     while True:
@@ -154,18 +158,16 @@ def keepalive_forever():
             print("[KEEPALIVE] Self-ping sent ✅")
         except Exception as e:
             print(f"[KEEPALIVE] Ping failed: {e}")
-        time.sleep(20)  # elke 20 seconden
-
-# Start direct bij import
-threading.Thread(target=keepalive_forever, daemon=True).start()
-atexit.register(lambda: print("[KEEPALIVE] Flask shutting down gracefully."))
+        time.sleep(20)
 
 @app.before_first_request
 def delay_healthcheck():
     """Voorkomt dat Railway de healthcheck te vroeg uitvoert."""
-    import time
     print("[BOOT] Delaying healthcheck for 10 seconds...")
     time.sleep(10)
+
+threading.Thread(target=keepalive_forever, daemon=True).start()
+atexit.register(lambda: print("[KEEPALIVE] Flask shutting down gracefully."))
 
 # ------------------------------------------------------------
 # 🚀 Entry point (for local or gunicorn)
