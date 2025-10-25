@@ -115,6 +115,32 @@ def send_reply():
 # ------------------------------------------------------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+# ------------------------------------------------------------
+# 🛰️ Auto-set Telegram webhook bij opstart
+# ------------------------------------------------------------
+def ensure_webhook():
+    """Controleer of Telegram webhook goed is ingesteld, anders zet 'm opnieuw."""
+    if not TELEGRAM_TOKEN:
+        print("[TELEGRAM] Geen token gevonden — webhook wordt niet gezet.")
+        return
+    try:
+        webhook_url = f"https://solarbot.up.railway.app/telegram"
+        info_url = f"https://api.telegram.org/bot8144901485:AAFAKRW937a162xycAVna_CHE4S-shcv5JA/getWebhookInfo"
+        set_url = f"https://api.telegram.org/bot8144901485:AAFAKRW937a162xycAVna_CHE4S-shcv5JA/setWebhook?url={webhook_url}"
+
+        info = requests.get(info_url, timeout=5).json()
+        current = info.get("result", {}).get("url", "")
+        if current != webhook_url:
+            r = requests.get(set_url, timeout=5).json()
+            print(f"[TELEGRAM] Webhook reset: {r}")
+        else:
+            print("[TELEGRAM] Webhook al correct ingesteld.")
+    except Exception as e:
+        print(f"[TELEGRAM] Fout bij instellen webhook: {e}")
+
+# Zet de webhook zodra de server start
+threading.Thread(target=ensure_webhook, daemon=True).start()
+
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
     data = request.get_json(force=True)
@@ -131,7 +157,7 @@ def telegram_webhook():
             reply = generate_response(message)
             print(f"[Telegram] Bot antwoordt: {reply}")
             requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                f"https://api.telegram.org/bot8144901485:AAFAKRW937a162xycAVna_CHE4S-shcv5JA/sendMessage",
                 json={"chat_id": chat_id, "text": reply},
             )
         except Exception as e:
