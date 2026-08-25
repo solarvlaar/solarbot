@@ -2,25 +2,24 @@ import os
 import random
 import re
 import threading
-import requests
-import torch
+import time
 
+import requests
 from flask import Flask, request, jsonify
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from twilio.twiml.messaging_response import MessagingResponse
 
 
 app = Flask(__name__)
 
-MODEL_PATH = os.getenv(
-    "MODEL_PATH",
-    "solarvlaar/solarbot"
+
+RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
+RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID")
+
+RUNPOD_URL = (
+    f"https://api.runpod.ai/v2/"
+    f"{RUNPOD_ENDPOINT_ID}/runsync"
 )
 
-HF_TOKEN = (
-    os.getenv("HF_TOKEN")
-    or os.getenv("HUGGINGFACE_HUB_TOKEN")
-)
 
 TELEGRAM_TOKEN = os.getenv(
     "TELEGRAM_BOT_TOKEN"
@@ -30,6 +29,7 @@ RAILWAY_URL = os.getenv(
     "RAILWAY_URL",
     "https://solarbot.up.railway.app"
 )
+
 
 BLOCKED_NAMES = {
     "erasmus",
@@ -44,43 +44,12 @@ BLOCKED_NAMES = {
     "friso",
 }
 
+
 generation_lock = threading.Lock()
 
 
-print("Loading model:", MODEL_PATH)
-
-try:
-    tokenizer = AutoTokenizer.from_pretrained(
-        MODEL_PATH,
-        token=HF_TOKEN
-    )
-
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_PATH,
-        token=HF_TOKEN
-    )
-
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu"
-    )
-
-    model.to(device)
-    model.eval()
-
-    READY = True
-
-    print("Model loaded.")
-    print("Device:", device)
-
-except Exception as e:
-    READY = False
-    tokenizer = None
-    model = None
-
-    print(
-        "Model loading failed:",
-        repr(e)
-    )
+print("[RunPod] Endpoint configured:", bool(RUNPOD_ENDPOINT_ID))
+print("[RunPod] API key configured:", bool(RUNPOD_API_KEY))
 
 
 def contains_blocked_name(text):
@@ -96,7 +65,10 @@ def contains_blocked_name(text):
     )
 
 
-def limit_repeated_lines(text, max_repetitions=3):
+def limit_repeated_lines(
+    text,
+    max_repetitions=3
+):
 
     lines = [
         line.strip()
@@ -105,26 +77,36 @@ def limit_repeated_lines(text, max_repetitions=3):
     ]
 
     result = []
+
     last_line = None
     repetition_count = 0
 
     for line in lines:
 
         if line == last_line:
+
             repetition_count += 1
+
         else:
+
             last_line = line
             repetition_count = 1
 
         if repetition_count <= max_repetitions:
+
             result.append(line)
+
         else:
+
             break
 
     return "\n".join(result)
 
 
-def remove_truncated_last_line(text, was_truncated):
+def remove_truncated_last_line(
+    text,
+    was_truncated
+):
 
     if not was_truncated:
         return text
@@ -138,6 +120,20 @@ def remove_truncated_last_line(text, was_truncated):
     if len(lines) <= 1:
         return text
 
+    last_line = lines[-1]
+
+    sentence_endings = (
+        ".",
+        "!",
+        "?",
+        "…",
+        "❤️",
+        "♥️"
+    )
+
+    if last_line.endswith(sentence_endings):
+        return text
+
     lines.pop()
 
     return "\n".join(lines)
@@ -145,118 +141,239 @@ def remove_truncated_last_line(text, was_truncated):
 
 def generate_response(prompt):
 
-    if not READY:
+    if not RUNPOD_API_KEY:
+
+        print(
+            "[RunPod] Missing RUNPOD_API_KEY."
+        )
+
         return "❤️"
 
-    input_text = (
-        f"<|prompter|>\n"
+    if not RUNPOD_ENDPOINT_ID:
+
+        print(
+            "[RunPod] Missing RUNPOD_ENDPOINT_ID."
+        )
+
+        return "❤️"
+
+
+    style = random.choices(
+        ["short", "normal", "long"],
+        weights=[0.25, 0.70, 0.05]
+    )[0]
+
+
+    if style == "short":
+
+        max_new_tokens = 25
+        temperature = 0.60
+
+    elif style == "normal":
+
+        max_new_tokens = 60
+        temperature = 0.65
+
+    else:
+
+        max_new_tokens = 80
+        temperature = 0.70
+
+
+    formatted_prompt = (
+        "<|prompter|>\n"
         f"{prompt}\n"
-        f"<|responder|>\n"
+        "<|responder|>\n"
     )
 
-    input_ids = tokenizer.encode(
-        input_text,
-        return_tensors="pt"
-    ).to(device)
 
-    for attempt in range(3):
+    payload = {
 
-        style = random.choices(
-            ["short", "normal", "long"],
-            weights=[0.25, 0.70, 0.05]
-        )[0]
+        "input": {
 
-        if style == "short":
-            max_new_tokens = 25
-            temperature = 0.60
+            "prompt": formatted_prompt,
 
-        elif style == "normal":
-            max_new_tokens = 60
-            temperature = 0.65
+            "max_tokens": max_new_tokens,
 
-        else:
-            max_new_tokens = 80
-            temperature = 0.70
+            "temperature": temperature,
 
-        try:
+            "top_k": 50,
 
-            with torch.no_grad():
+            "top_p": 0.85,
 
-                output_ids = model.generate(
-                    input_ids,
-                    do_sample=True,
-                    temperature=temperature,
-                    top_k=50,
-                    top_p=0.85,
-                    repetition_penalty=1.05,
-                    max_new_tokens=max_new_tokens,
-                    pad_token_id=tokenizer.eos_token_id,
-                    eos_token_id=tokenizer.eos_token_id
-                )
+            "repetition_penalty": 1.05,
 
-            generated_tokens = (
-                output_ids.shape[1]
-                - input_ids.shape[1]
-            )
+            "stop": [
+                "<|prompter|>"
+            ]
+        }
+    }
 
-            was_truncated = (
-                generated_tokens >= max_new_tokens
-            )
 
-            generated = tokenizer.decode(
-                output_ids[0],
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False
-            )
+    headers = {
 
-            if "<|responder|>" in generated:
+        "Authorization":
+            f"Bearer {RUNPOD_API_KEY}",
 
-                response = generated.split(
-                    "<|responder|>\n"
-                )[-1].strip()
+        "Content-Type":
+            "application/json"
+    }
 
-            else:
 
-                response = generated.replace(
-                    input_text,
-                    ""
-                ).strip()
+    started_at = time.time()
 
-            response = limit_repeated_lines(
-                response,
-                max_repetitions=3
-            )
 
-            response = remove_truncated_last_line(
-                response,
-                was_truncated
-            )
+    try:
 
-            if not response:
-                continue
+        print(
+            "[RunPod] Sending request..."
+        )
 
-            if contains_blocked_name(response):
 
-                print(
-                    f"[Model] Blocked name detected "
-                    f"(attempt {attempt + 1}):",
-                    response
-                )
+        response = requests.post(
 
-                continue
+            RUNPOD_URL,
 
-            return response[:500]
+            json=payload,
 
-        except Exception as e:
+            headers=headers,
+
+            timeout=300
+        )
+
+
+        elapsed = (
+            time.time()
+            - started_at
+        )
+
+
+        print(
+            f"[RunPod] Request completed "
+            f"in {elapsed:.2f}s"
+        )
+
+
+        print(
+            "[RunPod] HTTP status:",
+            response.status_code
+        )
+
+
+        response.raise_for_status()
+
+
+        result = response.json()
+
+
+        output = result.get(
+            "output",
+            {}
+        )
+
+
+        choices = output.get(
+            "choices",
+            []
+        )
+
+
+        if not choices:
 
             print(
-                "[Model] Generation failed:",
-                repr(e)
+                "[RunPod] No choices in response:",
+                result
             )
 
-            break
+            return "❤️"
 
-    return "❤️"
+
+        generated_text = choices[0].get(
+            "text",
+            ""
+        )
+
+
+        text = generated_text.strip()
+
+
+        text = limit_repeated_lines(
+            text,
+            max_repetitions=3
+        )
+
+
+        finish_reason = choices[0].get(
+            "finish_reason"
+        )
+
+
+        was_truncated = (
+            finish_reason == "length"
+        )
+
+
+        text = remove_truncated_last_line(
+            text,
+            was_truncated
+        )
+
+
+        if contains_blocked_name(text):
+
+            print(
+                "[RunPod] Blocked name detected:",
+                text
+            )
+
+            return "❤️"
+
+
+        if not text:
+
+            print(
+                "[RunPod] Empty response."
+            )
+
+            return "❤️"
+
+
+        print(
+            "[RunPod] Response:",
+            text
+        )
+
+
+        return text[:500]
+
+
+    except requests.exceptions.Timeout:
+
+        print(
+            "[RunPod] Request timed out."
+        )
+
+        return "❤️"
+
+
+    except requests.exceptions.RequestException as e:
+
+        print(
+            "[RunPod] Request failed:",
+            repr(e)
+        )
+
+        return "❤️"
+
+
+    except Exception as e:
+
+        print(
+            "[RunPod] Unexpected error:",
+            repr(e)
+        )
+
+        return "❤️"
 
 
 def process_telegram_message(
@@ -267,11 +384,14 @@ def process_telegram_message(
 
     print(
         f"[Telegram] Processing update "
-        f"{update_id}:",
-        message
+        f"{update_id}: {message}"
     )
 
+
     with generation_lock:
+
+        started_at = time.time()
+
 
         try:
 
@@ -279,35 +399,62 @@ def process_telegram_message(
                 message
             )
 
-            print(
-                f"[Telegram] Generated update "
-                f"{update_id}:",
-                response
+
+            elapsed = (
+                time.time()
+                - started_at
             )
 
+
+            print(
+                f"[Generation] Finished update "
+                f"{update_id} "
+                f"in {elapsed:.2f}s"
+            )
+
+
+            print(
+                f"[Generation] Output update "
+                f"{update_id}: {response}"
+            )
+
+
+            telegram_url = (
+                "https://api.telegram.org/"
+                f"bot{TELEGRAM_TOKEN}/sendMessage"
+            )
+
+
             result = requests.post(
-                f"https://api.telegram.org/"
-                f"bot{TELEGRAM_TOKEN}/sendMessage",
+
+                telegram_url,
+
                 json={
+
                     "chat_id": chat_id,
+
                     "text": response
                 },
+
                 timeout=30
             )
 
+
             print(
                 f"[Telegram] Sent update "
-                f"{update_id}:",
-                result.status_code
+                f"{update_id}: "
+                f"{result.status_code}"
             )
+
 
             if not result.ok:
 
                 print(
                     f"[Telegram] Send error "
-                    f"{update_id}:",
-                    result.text
+                    f"{update_id}: "
+                    f"{result.text}"
                 )
+
 
         except Exception as e:
 
@@ -328,19 +475,23 @@ def telegram_webhook():
         force=True
     )
 
+
     update_id = data.get(
         "update_id"
     )
+
 
     message_data = data.get(
         "message",
         {}
     )
 
+
     message = message_data.get(
         "text",
         ""
     )
+
 
     chat_id = message_data.get(
         "chat",
@@ -349,10 +500,12 @@ def telegram_webhook():
         "id"
     )
 
+
     print(
         f"[Telegram] Received update "
-        f"{update_id}"
+        f"{update_id}: {message}"
     )
+
 
     if not message or not chat_id:
 
@@ -365,21 +518,30 @@ def telegram_webhook():
             "status": "ignored"
         }), 200
 
+
     print(
         f"[Telegram] Accepted update "
-        f"{update_id}:",
-        message
+        f"{update_id}: {message}"
     )
 
+
     threading.Thread(
+
         target=process_telegram_message,
+
         args=(
+
             message,
+
             chat_id,
+
             update_id
         ),
+
         daemon=True
+
     ).start()
+
 
     return jsonify({
         "status": "accepted"
@@ -397,10 +559,12 @@ def whatsapp_webhook():
         ""
     )
 
+
     sender = request.values.get(
         "From",
         ""
     )
+
 
     print(
         "[WhatsApp]:",
@@ -408,11 +572,13 @@ def whatsapp_webhook():
         incoming_message
     )
 
+
     if not incoming_message:
 
         return str(
             MessagingResponse()
         )
+
 
     try:
 
@@ -420,10 +586,12 @@ def whatsapp_webhook():
             incoming_message
         )
 
+
         print(
             "[WhatsApp] Response:",
             response
         )
+
 
     except Exception as e:
 
@@ -432,13 +600,17 @@ def whatsapp_webhook():
             repr(e)
         )
 
+
         response = "❤️"
 
+
     twilio_response = MessagingResponse()
+
 
     twilio_response.message(
         response
     )
+
 
     return str(
         twilio_response
@@ -450,13 +622,6 @@ def whatsapp_webhook():
     methods=["GET"]
 )
 def health_check():
-
-    if not READY:
-
-        return (
-            "Model unavailable",
-            503
-        )
 
     return (
         "Solarbot is running",
@@ -474,25 +639,32 @@ def setup_telegram_webhook():
 
         return
 
+
     webhook_url = (
         f"{RAILWAY_URL}/telegram"
     )
 
+
     try:
 
         response = requests.post(
+
             f"https://api.telegram.org/"
             f"bot{TELEGRAM_TOKEN}/setWebhook",
+
             data={
                 "url": webhook_url
             },
+
             timeout=30
         )
+
 
         print(
             "[Telegram] Webhook:",
             response.text
         )
+
 
     except Exception as e:
 
@@ -516,12 +688,16 @@ if __name__ == "__main__":
         )
     )
 
+
     print(
         "Starting server on port",
         port
     )
 
+
     app.run(
+
         host="0.0.0.0",
+
         port=port
     )
