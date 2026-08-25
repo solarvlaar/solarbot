@@ -1,19 +1,15 @@
-# --- Core server ---
 flask==3.0.3
 gevent==24.2.1
 gunicorn==22.0.0
 twilio==9.3.2
 
-# --- AI model ---
-transformers==4.44.2
-torch==2.9.0+cpu
+transformers==5.15.0
+tokenizers==0.22.2
+torch==2.11.0+cpu
 --extra-index-url https://download.pytorch.org/whl/cpu
 accelerate==0.33.0
 safetensors==0.4.2
 numpy==1.26.4
 
-# --- Utilities ---
 requests==2.32.3
-
-# --- Optional (for Telegram later) ---
 python-telegram-bot==20.3
