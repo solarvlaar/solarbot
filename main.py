@@ -12,7 +12,12 @@ from twilio.twiml.messaging_response import MessagingResponse
 app = Flask(__name__)
 
 MODEL_PATH = os.getenv("MODEL_PATH", "solarvlaar/solarbot")
-HF_TOKEN = os.getenv("HF_TOKEN")
+
+HF_TOKEN = (
+    os.getenv("HF_TOKEN")
+    or os.getenv("HUGGINGFACE_HUB_TOKEN")
+)
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 RAILWAY_URL = os.getenv(
@@ -51,10 +56,14 @@ except Exception as e:
     tokenizer = None
     model = None
 
-    print("Model loading failed:", repr(e))
+    print(
+        "Model loading failed:",
+        repr(e)
+    )
 
 
 def limit_repeated_lines(text, max_repetitions=3):
+
     lines = [
         line.strip()
         for line in text.splitlines()
@@ -82,6 +91,7 @@ def limit_repeated_lines(text, max_repetitions=3):
 
 
 def remove_truncated_last_line(text, was_truncated):
+
     if not was_truncated:
         return text
 
