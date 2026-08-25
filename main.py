@@ -36,6 +36,14 @@ BLOCKED_NAMES = {
     "thijs",
     "matthijs",
     "friso",
+    "solar",
+    "lucas",
+    "luc",
+    "coen",
+    "daan",
+    "daantje",
+    "olivier",
+    "steven",
 }
 
 generation_lock = threading.Lock()
