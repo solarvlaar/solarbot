@@ -8,7 +8,7 @@ tokenizers==0.22.2
 torch==2.11.0+cpu
 --extra-index-url https://download.pytorch.org/whl/cpu
 accelerate==0.33.0
-safetensors==0.4.2
+safetensors>=0.8.0
 numpy==1.26.4
 
 requests==2.32.3
