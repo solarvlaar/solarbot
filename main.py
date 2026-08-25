@@ -1,7 +1,7 @@
 import os
 import random
 import re
-import time
+import threading
 import requests
 import torch
 
@@ -38,6 +38,8 @@ BLOCKED_NAMES = {
     "matthijs",
     "friso",
 }
+
+generation_lock = threading.Lock()
 
 
 print("Loading model:", MODEL_PATH)
@@ -231,7 +233,7 @@ def generate_response(prompt):
             if contains_blocked_name(response):
 
                 print(
-                    f"Blocked name detected "
+                    f"[Model] Blocked name detected "
                     f"(attempt {attempt + 1}):",
                     response
                 )
@@ -243,7 +245,7 @@ def generate_response(prompt):
         except Exception as e:
 
             print(
-                "Generation failed:",
+                "[Model] Generation failed:",
                 repr(e)
             )
 
@@ -252,11 +254,65 @@ def generate_response(prompt):
     return "❤️"
 
 
+def process_telegram_message(message, chat_id, update_id):
+
+    print(
+        f"[Telegram] Processing update {update_id}:",
+        message
+    )
+
+    with generation_lock:
+
+        try:
+
+            response = generate_response(
+                message
+            )
+
+            print(
+                f"[Telegram] Generated update {update_id}:",
+                response
+            )
+
+            result = requests.post(
+                f"https://api.telegram.org/"
+                f"bot{TELEGRAM_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": response
+                },
+                timeout=30
+            )
+
+            print(
+                f"[Telegram] Sent update {update_id}:",
+                result.status_code
+            )
+
+            if not result.ok:
+
+                print(
+                    f"[Telegram] Send error {update_id}:",
+                    result.text
+                )
+
+        except Exception as e:
+
+            print(
+                f"[Telegram] Processing error {update_id}:",
+                repr(e)
+            )
+
+
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
 
     data = request.get_json(
         force=True
+    )
+
+    update_id = data.get(
+        "update_id"
     )
 
     message_data = data.get(
@@ -276,53 +332,37 @@ def telegram_webhook():
         "id"
     )
 
+    print(
+        f"[Telegram] Received update {update_id}"
+    )
+
     if not message or not chat_id:
+
+        print(
+            f"[Telegram] Ignored update {update_id}"
+        )
 
         return jsonify({
             "status": "ignored"
         }), 200
 
     print(
-        "Telegram:",
+        f"[Telegram] Accepted update {update_id}:",
         message
     )
 
-    try:
-
-        response = generate_response(
-            message
-        )
-
-        print(
-            "Telegram response:",
-            response
-        )
-
-        result = requests.post(
-            f"https://api.telegram.org/"
-            f"bot{TELEGRAM_TOKEN}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": response
-            },
-            timeout=30
-        )
-
-        print(
-            "Telegram send:",
-            result.status_code,
-            result.text
-        )
-
-    except Exception as e:
-
-        print(
-            "Telegram error:",
-            repr(e)
-        )
+    threading.Thread(
+        target=process_telegram_message,
+        args=(
+            message,
+            chat_id,
+            update_id
+        ),
+        daemon=True
+    ).start()
 
     return jsonify({
-        "status": "ok"
+        "status": "accepted"
     }), 200
 
 
@@ -340,7 +380,7 @@ def whatsapp_webhook():
     )
 
     print(
-        "WhatsApp:",
+        "[WhatsApp]:",
         sender,
         incoming_message
     )
@@ -358,14 +398,14 @@ def whatsapp_webhook():
         )
 
         print(
-            "WhatsApp response:",
+            "[WhatsApp] Response:",
             response
         )
 
     except Exception as e:
 
         print(
-            "WhatsApp error:",
+            "[WhatsApp] Error:",
             repr(e)
         )
 
@@ -386,6 +426,7 @@ def whatsapp_webhook():
 def health_check():
 
     if not READY:
+
         return (
             "Model unavailable",
             503
@@ -402,7 +443,7 @@ def setup_telegram_webhook():
     if not TELEGRAM_TOKEN:
 
         print(
-            "Telegram token not configured."
+            "[Telegram] Token not configured."
         )
 
         return
@@ -423,25 +464,24 @@ def setup_telegram_webhook():
         )
 
         print(
-            "Telegram webhook:",
+            "[Telegram] Webhook:",
             response.text
         )
 
     except Exception as e:
 
         print(
-            "Webhook setup failed:",
+            "[Telegram] Webhook setup failed:",
             repr(e)
         )
 
 
 if TELEGRAM_TOKEN:
+
     setup_telegram_webhook()
 
 
 if __name__ == "__main__":
-
-    time.sleep(3)
 
     port = int(
         os.environ.get(
