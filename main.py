@@ -311,7 +311,6 @@ def setup_telegram_webhook():
             repr(e)
         )
 
-
 if __name__ == "__main__":
     time.sleep(3)
 
