@@ -13,14 +13,9 @@ app = Flask(__name__)
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
 RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID")
 
-RUNPOD_RUN_URL = (
+RUNPOD_COMPLETIONS_URL = (
     f"https://api.runpod.ai/v2/"
-    f"{RUNPOD_ENDPOINT_ID}/run"
-)
-
-RUNPOD_STATUS_URL = (
-    f"https://api.runpod.ai/v2/"
-    f"{RUNPOD_ENDPOINT_ID}/status"
+    f"{RUNPOD_ENDPOINT_ID}/openai/v1/completions"
 )
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -157,17 +152,16 @@ def generate_response(prompt):
     )
 
     payload = {
-        "input": {
-            "prompt": formatted_prompt,
-            "max_tokens": max_new_tokens,
-            "temperature": temperature,
-            "top_k": 50,
-            "top_p": 0.85,
-            "repetition_penalty": 1.05,
-            "stop": [
-                "<|prompter|>"
-            ]
-        }
+        "model": "solarvlaar/solarbot",
+        "prompt": formatted_prompt,
+        "max_tokens": max_new_tokens,
+        "temperature": temperature,
+        "top_k": 50,
+        "top_p": 0.85,
+        "repetition_penalty": 1.05,
+        "stop": [
+            "<|prompter|>"
+        ]
     }
 
     headers = {
@@ -178,147 +172,88 @@ def generate_response(prompt):
     started_at = time.time()
 
     try:
-        print("[RunPod] Submitting async request...")
+        print("[RunPod] Sending OpenAI completion request...")
 
         response = requests.post(
-            RUNPOD_RUN_URL,
+            RUNPOD_COMPLETIONS_URL,
             json=payload,
             headers=headers,
-            timeout=30
+            timeout=300
+        )
+
+        elapsed = time.time() - started_at
+
+        print(
+            f"[RunPod] Request completed in "
+            f"{elapsed:.2f}s"
         )
 
         print(
-            "[RunPod] Submit HTTP status:",
+            "[RunPod] HTTP status:",
             response.status_code
         )
 
         response.raise_for_status()
 
-        job = response.json()
-
-        job_id = job.get("id")
-
-        if not job_id:
-            print("[RunPod] No job ID:", job)
-            return "❤️"
-
-        print("[RunPod] Job submitted:", job_id)
-
-        status_url = f"{RUNPOD_STATUS_URL}/{job_id}"
-
-        max_wait = 300
-
-        while time.time() - started_at < max_wait:
-            status_response = requests.get(
-                status_url,
-                headers=headers,
-                timeout=30
-            )
-
-            status_response.raise_for_status()
-
-            status_data = status_response.json()
-
-            status = status_data.get("status")
-
-            print("[RunPod] Job status:", status)
-
-            if status == "COMPLETED":
-                output = status_data.get(
-                    "output",
-                    []
-                )
-
-                if isinstance(output, list):
-                    if not output:
-                        print(
-                            "[RunPod] Empty output:",
-                            status_data
-                        )
-                        return "❤️"
-
-                    output = output[0]
-
-                choices = output.get(
-                    "choices",
-                    []
-                )
-
-                if not choices:
-                    print(
-                        "[RunPod] No choices:",
-                        status_data
-                    )
-                    return "❤️"
-
-                choice = choices[0]
-
-                text = choice.get(
-                    "text",
-                    ""
-                ).strip()
-
-                finish_reason = choice.get(
-                    "finish_reason"
-                )
-
-                text = limit_repeated_lines(
-                    text,
-                    max_repetitions=3
-                )
-
-                text = remove_truncated_last_line(
-                    text,
-                    finish_reason == "length"
-                )
-
-                if contains_blocked_name(text):
-                    print(
-                        "[RunPod] Blocked name detected:",
-                        text
-                    )
-                    return "❤️"
-
-                if not text:
-                    print("[RunPod] Empty response.")
-                    return "❤️"
-
-                elapsed = time.time() - started_at
-
-                print(
-                    f"[RunPod] Completed in "
-                    f"{elapsed:.2f}s"
-                )
-
-                print(
-                    "[RunPod] Response:",
-                    text
-                )
-
-                return text[:500]
-
-            if status == "FAILED":
-                print(
-                    "[RunPod] Job failed:",
-                    status_data
-                )
-                return "❤️"
-
-            if status == "CANCELLED":
-                print("[RunPod] Job cancelled.")
-                return "❤️"
-
-            time.sleep(1)
+        result = response.json()
 
         print(
-            "[RunPod] Job timed out after "
-            f"{max_wait}s"
+            "[RunPod] Response received."
         )
 
-        return "❤️"
+        choices = result.get(
+            "choices",
+            []
+        )
+
+        if not choices:
+            print(
+                "[RunPod] No choices in response:",
+                result
+            )
+            return "❤️"
+
+        choice = choices[0]
+
+        text = choice.get(
+            "text",
+            ""
+        ).strip()
+
+        finish_reason = choice.get(
+            "finish_reason"
+        )
+
+        text = limit_repeated_lines(
+            text,
+            max_repetitions=3
+        )
+
+        text = remove_truncated_last_line(
+            text,
+            finish_reason == "length"
+        )
+
+        if contains_blocked_name(text):
+            print(
+                "[RunPod] Blocked name detected:",
+                text
+            )
+            return "❤️"
+
+        if not text:
+            print("[RunPod] Empty response.")
+            return "❤️"
+
+        print(
+            "[RunPod] Response:",
+            text
+        )
+
+        return text[:500]
 
     except requests.exceptions.Timeout:
-        print("[RunPod] HTTP request timed out.")
+        print("[RunPod] Request timed out.")
         return "❤️"
 
     except requests.exceptions.RequestException as e:
@@ -350,13 +285,16 @@ def process_telegram_message(
         started_at = time.time()
 
         try:
-            response = generate_response(message)
+            response = generate_response(
+                message
+            )
 
             elapsed = time.time() - started_at
 
             print(
                 f"[Generation] Finished update "
-                f"{update_id} in {elapsed:.2f}s"
+                f"{update_id} "
+                f"in {elapsed:.2f}s"
             )
 
             print(
@@ -406,7 +344,9 @@ def process_telegram_message(
 def telegram_webhook():
     data = request.get_json(force=True)
 
-    update_id = data.get("update_id")
+    update_id = data.get(
+        "update_id"
+    )
 
     message_data = data.get(
         "message",
