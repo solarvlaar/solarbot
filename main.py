@@ -15,9 +15,14 @@ app = Flask(__name__)
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
 RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID")
 
-RUNPOD_URL = (
+RUNPOD_RUN_URL = (
     f"https://api.runpod.ai/v2/"
-    f"{RUNPOD_ENDPOINT_ID}/runsync"
+    f"{RUNPOD_ENDPOINT_ID}/run"
+)
+
+RUNPOD_STATUS_URL = (
+    f"https://api.runpod.ai/v2/"
+    f"{RUNPOD_ENDPOINT_ID}/status"
 )
 
 
@@ -48,8 +53,15 @@ BLOCKED_NAMES = {
 generation_lock = threading.Lock()
 
 
-print("[RunPod] Endpoint configured:", bool(RUNPOD_ENDPOINT_ID))
-print("[RunPod] API key configured:", bool(RUNPOD_API_KEY))
+print(
+    "[RunPod] Endpoint configured:",
+    bool(RUNPOD_ENDPOINT_ID)
+)
+
+print(
+    "[RunPod] API key configured:",
+    bool(RUNPOD_API_KEY)
+)
 
 
 def contains_blocked_name(text):
@@ -188,21 +200,13 @@ def generate_response(prompt):
 
 
     payload = {
-
         "input": {
-
             "prompt": formatted_prompt,
-
             "max_tokens": max_new_tokens,
-
             "temperature": temperature,
-
             "top_k": 50,
-
             "top_p": 0.85,
-
             "repetition_penalty": 1.05,
-
             "stop": [
                 "<|prompter|>"
             ]
@@ -211,7 +215,6 @@ def generate_response(prompt):
 
 
     headers = {
-
         "Authorization":
             f"Bearer {RUNPOD_API_KEY}",
 
@@ -226,36 +229,20 @@ def generate_response(prompt):
     try:
 
         print(
-            "[RunPod] Sending request..."
+            "[RunPod] Submitting async request..."
         )
 
 
         response = requests.post(
-
-            RUNPOD_URL,
-
+            RUNPOD_RUN_URL,
             json=payload,
-
             headers=headers,
-
-            timeout=300
-        )
-
-
-        elapsed = (
-            time.time()
-            - started_at
+            timeout=30
         )
 
 
         print(
-            f"[RunPod] Request completed "
-            f"in {elapsed:.2f}s"
-        )
-
-
-        print(
-            "[RunPod] HTTP status:",
+            "[RunPod] Submit HTTP status:",
             response.status_code
         )
 
@@ -263,94 +250,193 @@ def generate_response(prompt):
         response.raise_for_status()
 
 
-        result = response.json()
+        job = response.json()
 
 
-        output = result.get(
-            "output",
-            {}
-        )
+        job_id = job.get("id")
 
 
-        choices = output.get(
-            "choices",
-            []
-        )
-
-
-        if not choices:
+        if not job_id:
 
             print(
-                "[RunPod] No choices in response:",
-                result
-            )
-
-            return "❤️"
-
-
-        generated_text = choices[0].get(
-            "text",
-            ""
-        )
-
-
-        text = generated_text.strip()
-
-
-        text = limit_repeated_lines(
-            text,
-            max_repetitions=3
-        )
-
-
-        finish_reason = choices[0].get(
-            "finish_reason"
-        )
-
-
-        was_truncated = (
-            finish_reason == "length"
-        )
-
-
-        text = remove_truncated_last_line(
-            text,
-            was_truncated
-        )
-
-
-        if contains_blocked_name(text):
-
-            print(
-                "[RunPod] Blocked name detected:",
-                text
-            )
-
-            return "❤️"
-
-
-        if not text:
-
-            print(
-                "[RunPod] Empty response."
+                "[RunPod] No job ID:",
+                job
             )
 
             return "❤️"
 
 
         print(
-            "[RunPod] Response:",
-            text
+            "[RunPod] Job submitted:",
+            job_id
         )
 
 
-        return text[:500]
+        status_url = (
+            f"{RUNPOD_STATUS_URL}/{job_id}"
+        )
+
+
+        max_wait = 300
+
+
+        while (
+            time.time() - started_at
+            < max_wait
+        ):
+
+            status_response = requests.get(
+                status_url,
+                headers=headers,
+                timeout=30
+            )
+
+
+            status_response.raise_for_status()
+
+
+            status_data = (
+                status_response.json()
+            )
+
+
+            status = status_data.get(
+                "status"
+            )
+
+
+            print(
+                "[RunPod] Job status:",
+                status
+            )
+
+
+            if status == "COMPLETED":
+
+                output = status_data.get(
+                    "output",
+                    {}
+                )
+
+
+                choices = output.get(
+                    "choices",
+                    []
+                )
+
+
+                if not choices:
+
+                    print(
+                        "[RunPod] No choices:",
+                        status_data
+                    )
+
+                    return "❤️"
+
+
+                choice = choices[0]
+
+
+                text = choice.get(
+                    "text",
+                    ""
+                ).strip()
+
+
+                finish_reason = choice.get(
+                    "finish_reason"
+                )
+
+
+                text = limit_repeated_lines(
+                    text,
+                    max_repetitions=3
+                )
+
+
+                text = remove_truncated_last_line(
+                    text,
+                    finish_reason == "length"
+                )
+
+
+                if contains_blocked_name(
+                    text
+                ):
+
+                    print(
+                        "[RunPod] Blocked name detected:",
+                        text
+                    )
+
+                    return "❤️"
+
+
+                if not text:
+
+                    print(
+                        "[RunPod] Empty response."
+                    )
+
+                    return "❤️"
+
+
+                elapsed = (
+                    time.time()
+                    - started_at
+                )
+
+
+                print(
+                    f"[RunPod] Completed in "
+                    f"{elapsed:.2f}s"
+                )
+
+
+                print(
+                    "[RunPod] Response:",
+                    text
+                )
+
+
+                return text[:500]
+
+
+            if status == "FAILED":
+
+                print(
+                    "[RunPod] Job failed:",
+                    status_data
+                )
+
+                return "❤️"
+
+
+            if status == "CANCELLED":
+
+                print(
+                    "[RunPod] Job cancelled."
+                )
+
+                return "❤️"
+
+
+            time.sleep(1)
+
+
+        print(
+            "[RunPod] Job timed out after "
+            f"{max_wait}s"
+        )
+
+        return "❤️"
 
 
     except requests.exceptions.Timeout:
 
         print(
-            "[RunPod] Request timed out."
+            "[RunPod] HTTP request timed out."
         )
 
         return "❤️"
@@ -426,16 +512,11 @@ def process_telegram_message(
 
 
             result = requests.post(
-
                 telegram_url,
-
                 json={
-
                     "chat_id": chat_id,
-
                     "text": response
                 },
-
                 timeout=30
             )
 
@@ -526,20 +607,13 @@ def telegram_webhook():
 
 
     threading.Thread(
-
         target=process_telegram_message,
-
         args=(
-
             message,
-
             chat_id,
-
             update_id
         ),
-
         daemon=True
-
     ).start()
 
 
@@ -587,12 +661,6 @@ def whatsapp_webhook():
         )
 
 
-        print(
-            "[WhatsApp] Response:",
-            response
-        )
-
-
     except Exception as e:
 
         print(
@@ -600,17 +668,14 @@ def whatsapp_webhook():
             repr(e)
         )
 
-
         response = "❤️"
 
 
     twilio_response = MessagingResponse()
 
-
     twilio_response.message(
         response
     )
-
 
     return str(
         twilio_response
@@ -648,14 +713,11 @@ def setup_telegram_webhook():
     try:
 
         response = requests.post(
-
             f"https://api.telegram.org/"
             f"bot{TELEGRAM_TOKEN}/setWebhook",
-
             data={
                 "url": webhook_url
             },
-
             timeout=30
         )
 
@@ -696,8 +758,6 @@ if __name__ == "__main__":
 
 
     app.run(
-
         host="0.0.0.0",
-
         port=port
     )
