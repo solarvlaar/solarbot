@@ -20,7 +20,6 @@ RAILWAY_URL = os.getenv(
     "https://solarbot.up.railway.app"
 )
 
-
 print("Loading model:", MODEL_PATH)
 
 try:
