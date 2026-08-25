@@ -1,5 +1,4 @@
 import os
-import re
 import random
 import time
 import requests
@@ -15,10 +14,12 @@ app = Flask(__name__)
 MODEL_PATH = os.getenv("MODEL_PATH", "solarvlaar/solarbot")
 HF_TOKEN = os.getenv("HF_TOKEN")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
 RAILWAY_URL = os.getenv(
     "RAILWAY_URL",
     "https://solarbot.up.railway.app"
 )
+
 
 print("Loading model:", MODEL_PATH)
 
@@ -53,83 +54,53 @@ except Exception as e:
     print("Model loading failed:", repr(e))
 
 
-# Common capitalized words that should not be treated as names.
-EXCLUDED_WORDS = {
-    "Ik",
-    "Je",
-    "Jij",
-    "Jullie",
-    "We",
-    "Wij",
-    "Hij",
-    "Zij",
-    "Ze",
-    "Het",
-    "Maar",
-    "Dus",
-    "En",
-    "Dan",
-    "Nee",
-    "Ja",
-    "Oke",
-    "Oké",
-    "Lol",
-    "Hey",
-    "Hoi",
-    "Hé",
-    "Hee",
-    "Goeiemiddag",
-    "Goeiemorgen",
-    "Goedenavond",
-    "Lief",
-    "Lieve",
-    "Nou",
-    "Hm",
-    "Hmm",
-    "Ach",
-    "Oh",
-    "Ooh",
-    "Aah",
-    "Ah",
-    "Ok"
-}
+def limit_repeated_lines(text, max_repetitions=3):
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip()
+    ]
+
+    result = []
+    last_line = None
+    repetition_count = 0
+
+    for line in lines:
+
+        if line == last_line:
+            repetition_count += 1
+        else:
+            last_line = line
+            repetition_count = 1
+
+        if repetition_count <= max_repetitions:
+            result.append(line)
+        else:
+            break
+
+    return "\n".join(result)
 
 
-def bevat_voornaam(text):
-    for match in re.finditer(
-        r"\b([A-Z][a-zäöüïëéèáíóúû]{3,12})\b",
-        text
-    ):
-        word = match.group(1)
+def remove_truncated_last_line(text, was_truncated):
+    if not was_truncated:
+        return text
 
-        if word not in EXCLUDED_WORDS:
-            return True
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip()
+    ]
 
-    return False
+    if len(lines) <= 1:
+        return text
 
+    lines.pop()
 
-def cleanup_response(text):
-    text = text.strip()
-    text = text.split("\n\n")[0].strip()
-
-    for ending in [".", "!", "?", "…", "🤍", "❤️", "💖", "💘"]:
-        parts = text.split(ending)
-
-        if len(parts) > 1:
-            first = parts[0].strip()
-
-            if len(first) >= 3:
-                return (first + ending).strip()
-
-    last_space = text.rfind(" ")
-
-    if last_space != -1:
-        text = text[:last_space].strip()
-
-    return text
+    return "\n".join(lines)
 
 
 def generate_response(prompt):
+
     if not READY:
         return "❤️"
 
@@ -145,91 +116,140 @@ def generate_response(prompt):
     ).to(device)
 
     style = random.choices(
-        ["short", "medium", "long"],
-        weights=[0.90, 0.09, 0.01]
+        ["short", "normal", "long"],
+        weights=[0.25, 0.70, 0.05]
     )[0]
 
     if style == "short":
-        max_new_tokens = random.randint(12, 22)
-        temperature = 0.55
+        max_new_tokens = 25
+        temperature = 0.60
 
-    elif style == "medium":
-        max_new_tokens = random.randint(22, 35)
+    elif style == "normal":
+        max_new_tokens = 60
         temperature = 0.65
 
     else:
-        max_new_tokens = random.randint(35, 50)
-        temperature = 0.75
+        max_new_tokens = 80
+        temperature = 0.70
 
-    eos_token_id = (
-        tokenizer.eos_token_id
-        if tokenizer.eos_token_id is not None
-        else tokenizer.pad_token_id
-    )
+    try:
 
-    for _ in range(2):
-        try:
-            with torch.no_grad():
-                output_ids = model.generate(
-                    input_ids,
-                    do_sample=True,
-                    temperature=temperature,
-                    top_k=50,
-                    top_p=0.85,
-                    repetition_penalty=1.05,
-                    max_new_tokens=max_new_tokens,
-                    pad_token_id=eos_token_id
-                )
+        with torch.no_grad():
 
-            generated = tokenizer.decode(
-                output_ids[0],
-                skip_special_tokens=True
+            output_ids = model.generate(
+                input_ids,
+                do_sample=True,
+                temperature=temperature,
+                top_k=50,
+                top_p=0.85,
+                repetition_penalty=1.05,
+                max_new_tokens=max_new_tokens,
+                pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=tokenizer.eos_token_id
             )
 
-            if "<|responder|>" in generated:
-                response = generated.split(
-                    "<|responder|>\n"
-                )[-1].strip()
-            else:
-                response = generated.replace(
-                    input_text,
-                    ""
-                ).strip()
+        generated_tokens = (
+            output_ids.shape[1]
+            - input_ids.shape[1]
+        )
 
-            response = cleanup_response(response)
+        was_truncated = (
+            generated_tokens >= max_new_tokens
+        )
 
-            if len(response) < 2:
-                continue
+        generated = tokenizer.decode(
+            output_ids[0],
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False
+        )
 
-            if bevat_voornaam(response):
-                continue
+        if "<|responder|>" in generated:
 
-            return response[:500]
+            response = generated.split(
+                "<|responder|>\n"
+            )[-1].strip()
 
-        except Exception as e:
-            print("Generation failed:", repr(e))
+        else:
 
-    return "❤️"
+            response = generated.replace(
+                input_text,
+                ""
+            ).strip()
+
+        response = limit_repeated_lines(
+            response,
+            max_repetitions=3
+        )
+
+        response = remove_truncated_last_line(
+            response,
+            was_truncated
+        )
+
+        if not response:
+            return "❤️"
+
+        return response[:500]
+
+    except Exception as e:
+
+        print(
+            "Generation failed:",
+            repr(e)
+        )
+
+        return "❤️"
 
 
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
-    data = request.get_json(force=True)
 
-    message_data = data.get("message", {})
-    message = message_data.get("text", "")
-    chat_id = message_data.get("chat", {}).get("id")
+    data = request.get_json(
+        force=True
+    )
+
+    message_data = data.get(
+        "message",
+        {}
+    )
+
+    message = message_data.get(
+        "text",
+        ""
+    )
+
+    chat_id = message_data.get(
+        "chat",
+        {}
+    ).get(
+        "id"
+    )
 
     if not message or not chat_id:
-        return jsonify({"status": "ignored"}), 200
 
-    print("Telegram:", message)
+        return jsonify({
+            "status": "ignored"
+        }), 200
+
+    print(
+        "Telegram:",
+        message
+    )
 
     try:
-        response = generate_response(message)
+
+        response = generate_response(
+            message
+        )
+
+        print(
+            "Telegram response:",
+            response
+        )
 
         requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            f"https://api.telegram.org/"
+            f"bot{TELEGRAM_TOKEN}/sendMessage",
             json={
                 "chat_id": chat_id,
                 "text": response
@@ -237,18 +257,30 @@ def telegram_webhook():
             timeout=30
         )
 
-        print("Telegram response:", response)
-
     except Exception as e:
-        print("Telegram error:", repr(e))
 
-    return jsonify({"status": "ok"}), 200
+        print(
+            "Telegram error:",
+            repr(e)
+        )
+
+    return jsonify({
+        "status": "ok"
+    }), 200
 
 
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
-    incoming_message = request.values.get("Body", "")
-    sender = request.values.get("From", "")
+
+    incoming_message = request.values.get(
+        "Body",
+        ""
+    )
+
+    sender = request.values.get(
+        "From",
+        ""
+    )
 
     print(
         "WhatsApp:",
@@ -257,10 +289,16 @@ def whatsapp_webhook():
     )
 
     if not incoming_message:
-        return str(MessagingResponse())
+
+        return str(
+            MessagingResponse()
+        )
 
     try:
-        response = generate_response(incoming_message)
+
+        response = generate_response(
+            incoming_message
+        )
 
         print(
             "WhatsApp response:",
@@ -268,34 +306,62 @@ def whatsapp_webhook():
         )
 
     except Exception as e:
-        print("WhatsApp error:", repr(e))
+
+        print(
+            "WhatsApp error:",
+            repr(e)
+        )
+
         response = "❤️"
 
     twilio_response = MessagingResponse()
-    twilio_response.message(response)
 
-    return str(twilio_response)
+    twilio_response.message(
+        response
+    )
+
+    return str(
+        twilio_response
+    )
 
 
 @app.route("/", methods=["GET"])
 def health_check():
-    if not READY:
-        return "Model unavailable", 503
 
-    return "Solarbot is running", 200
+    if not READY:
+        return (
+            "Model unavailable",
+            503
+        )
+
+    return (
+        "Solarbot is running",
+        200
+    )
 
 
 def setup_telegram_webhook():
+
     if not TELEGRAM_TOKEN:
-        print("Telegram token not configured.")
+
+        print(
+            "Telegram token not configured."
+        )
+
         return
 
-    webhook_url = f"{RAILWAY_URL}/telegram"
+    webhook_url = (
+        f"{RAILWAY_URL}/telegram"
+    )
 
     try:
+
         response = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook",
-            data={"url": webhook_url},
+            f"https://api.telegram.org/"
+            f"bot{TELEGRAM_TOKEN}/setWebhook",
+            data={
+                "url": webhook_url
+            },
             timeout=30
         )
 
@@ -305,21 +371,30 @@ def setup_telegram_webhook():
         )
 
     except Exception as e:
+
         print(
             "Webhook setup failed:",
             repr(e)
         )
 
+
 if __name__ == "__main__":
+
     time.sleep(3)
 
     setup_telegram_webhook()
 
     port = int(
-        os.environ.get("PORT", 5000)
+        os.environ.get(
+            "PORT",
+            5000
+        )
     )
 
-    print("Starting server on port", port)
+    print(
+        "Starting server on port",
+        port
+    )
 
     app.run(
         host="0.0.0.0",
