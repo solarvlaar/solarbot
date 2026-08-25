@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import time
 import requests
 import torch
@@ -24,6 +25,19 @@ RAILWAY_URL = os.getenv(
     "RAILWAY_URL",
     "https://solarbot.up.railway.app"
 )
+
+BLOCKED_NAMES = {
+    "erasmus",
+    "douwe",
+    "jelle",
+    "remy",
+    "wieg",
+    "wieger",
+    "jan",
+    "thijs",
+    "matthijs",
+    "friso",
+}
 
 
 print("Loading model:", MODEL_PATH)
@@ -59,6 +73,19 @@ except Exception as e:
     print(
         "Model loading failed:",
         repr(e)
+    )
+
+
+def contains_blocked_name(text):
+
+    words = re.findall(
+        r"\b[\wÀ-ÿ'-]+\b",
+        text.lower()
+    )
+
+    return any(
+        word in BLOCKED_NAMES
+        for word in words
     )
 
 
@@ -125,90 +152,104 @@ def generate_response(prompt):
         return_tensors="pt"
     ).to(device)
 
-    style = random.choices(
-        ["short", "normal", "long"],
-        weights=[0.25, 0.70, 0.05]
-    )[0]
+    for attempt in range(3):
 
-    if style == "short":
-        max_new_tokens = 25
-        temperature = 0.60
+        style = random.choices(
+            ["short", "normal", "long"],
+            weights=[0.25, 0.70, 0.05]
+        )[0]
 
-    elif style == "normal":
-        max_new_tokens = 60
-        temperature = 0.65
+        if style == "short":
+            max_new_tokens = 25
+            temperature = 0.60
 
-    else:
-        max_new_tokens = 80
-        temperature = 0.70
-
-    try:
-
-        with torch.no_grad():
-
-            output_ids = model.generate(
-                input_ids,
-                do_sample=True,
-                temperature=temperature,
-                top_k=50,
-                top_p=0.85,
-                repetition_penalty=1.05,
-                max_new_tokens=max_new_tokens,
-                pad_token_id=tokenizer.eos_token_id,
-                eos_token_id=tokenizer.eos_token_id
-            )
-
-        generated_tokens = (
-            output_ids.shape[1]
-            - input_ids.shape[1]
-        )
-
-        was_truncated = (
-            generated_tokens >= max_new_tokens
-        )
-
-        generated = tokenizer.decode(
-            output_ids[0],
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=False
-        )
-
-        if "<|responder|>" in generated:
-
-            response = generated.split(
-                "<|responder|>\n"
-            )[-1].strip()
+        elif style == "normal":
+            max_new_tokens = 60
+            temperature = 0.65
 
         else:
+            max_new_tokens = 80
+            temperature = 0.70
 
-            response = generated.replace(
-                input_text,
-                ""
-            ).strip()
+        try:
 
-        response = limit_repeated_lines(
-            response,
-            max_repetitions=3
-        )
+            with torch.no_grad():
 
-        response = remove_truncated_last_line(
-            response,
-            was_truncated
-        )
+                output_ids = model.generate(
+                    input_ids,
+                    do_sample=True,
+                    temperature=temperature,
+                    top_k=50,
+                    top_p=0.85,
+                    repetition_penalty=1.05,
+                    max_new_tokens=max_new_tokens,
+                    pad_token_id=tokenizer.eos_token_id,
+                    eos_token_id=tokenizer.eos_token_id
+                )
 
-        if not response:
-            return "❤️"
+            generated_tokens = (
+                output_ids.shape[1]
+                - input_ids.shape[1]
+            )
 
-        return response[:500]
+            was_truncated = (
+                generated_tokens >= max_new_tokens
+            )
 
-    except Exception as e:
+            generated = tokenizer.decode(
+                output_ids[0],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False
+            )
 
-        print(
-            "Generation failed:",
-            repr(e)
-        )
+            if "<|responder|>" in generated:
 
-        return "❤️"
+                response = generated.split(
+                    "<|responder|>\n"
+                )[-1].strip()
+
+            else:
+
+                response = generated.replace(
+                    input_text,
+                    ""
+                ).strip()
+
+            response = limit_repeated_lines(
+                response,
+                max_repetitions=3
+            )
+
+            response = remove_truncated_last_line(
+                response,
+                was_truncated
+            )
+
+            if not response:
+                continue
+
+            if contains_blocked_name(response):
+
+                print(
+                    f"Blocked name detected "
+                    f"(attempt {attempt + 1}):",
+                    response
+                )
+
+                continue
+
+            return response[:500]
+
+        except Exception as e:
+
+            print(
+                "Generation failed:",
+                repr(e)
+            )
+
+            break
+
+    return "❤️"
 
 
 @app.route("/telegram", methods=["POST"])
@@ -257,7 +298,7 @@ def telegram_webhook():
             response
         )
 
-        requests.post(
+        result = requests.post(
             f"https://api.telegram.org/"
             f"bot{TELEGRAM_TOKEN}/sendMessage",
             json={
@@ -265,6 +306,12 @@ def telegram_webhook():
                 "text": response
             },
             timeout=30
+        )
+
+        print(
+            "Telegram send:",
+            result.status_code,
+            result.text
         )
 
     except Exception as e:
@@ -388,11 +435,13 @@ def setup_telegram_webhook():
         )
 
 
+if TELEGRAM_TOKEN:
+    setup_telegram_webhook()
+
+
 if __name__ == "__main__":
 
     time.sleep(3)
-
-    setup_telegram_webhook()
 
     port = int(
         os.environ.get(
