@@ -6,7 +6,6 @@ import time
 
 import requests
 from flask import Flask, request, jsonify
-from twilio.twiml.messaging_response import MessagingResponse
 
 app = Flask(__name__)
 
@@ -39,6 +38,14 @@ BLOCKED_NAMES = {
     "thijs",
     "matthijs",
     "friso",
+    "solar",
+    "lucas",
+    "luc",
+    "coen",
+    "daan",
+    "daantje",
+    "olivier",
+    "steven",
 }
 
 generation_lock = threading.Lock()
