@@ -21,6 +21,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
 
 RAILWAY_URL = os.getenv(
     "RAILWAY_URL",
@@ -73,6 +74,11 @@ print(
 print(
     "[Twilio] Auth token configured:",
     bool(TWILIO_AUTH_TOKEN)
+)
+
+print(
+    "[Twilio] WhatsApp number configured:",
+    bool(TWILIO_WHATSAPP_NUMBER)
 )
 
 
@@ -397,6 +403,13 @@ def send_whatsapp_message(
 
         return False
 
+    if not TWILIO_WHATSAPP_NUMBER:
+        print(
+            "[WhatsApp] Missing TWILIO_WHATSAPP_NUMBER."
+        )
+
+        return False
+
     try:
         twilio_url = (
             "https://api.twilio.com/2010-04-01/"
@@ -405,7 +418,7 @@ def send_whatsapp_message(
         )
 
         data = {
-            "From": "whatsapp:+15558665761",
+            "From": TWILIO_WHATSAPP_NUMBER,
             "To": to_number,
             "Body": message
         }
