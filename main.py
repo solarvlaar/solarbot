@@ -20,6 +20,9 @@ RUNPOD_COMPLETIONS_URL = (
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+
 RAILWAY_URL = os.getenv(
     "RAILWAY_URL",
     "https://solarbot.up.railway.app"
@@ -53,6 +56,16 @@ print(
 print(
     "[RunPod] Completion URL:",
     RUNPOD_COMPLETIONS_URL
+)
+
+print(
+    "[Twilio] Account SID configured:",
+    bool(TWILIO_ACCOUNT_SID)
+)
+
+print(
+    "[Twilio] Auth token configured:",
+    bool(TWILIO_AUTH_TOKEN)
 )
 
 
@@ -359,6 +372,116 @@ def process_telegram_message(
             )
 
 
+def send_whatsapp_message(
+    to_number,
+    message
+):
+    if not TWILIO_ACCOUNT_SID:
+        print(
+            "[WhatsApp] Missing TWILIO_ACCOUNT_SID."
+        )
+
+        return False
+
+    if not TWILIO_AUTH_TOKEN:
+        print(
+            "[WhatsApp] Missing TWILIO_AUTH_TOKEN."
+        )
+
+        return False
+
+    try:
+        twilio_url = (
+            "https://api.twilio.com/2010-04-01/"
+            f"Accounts/{TWILIO_ACCOUNT_SID}/"
+            "Messages.json"
+        )
+
+        data = {
+            "From": "whatsapp:+15558665761",
+            "To": to_number,
+            "Body": message
+        }
+
+        response = requests.post(
+            twilio_url,
+            data=data,
+            auth=(
+                TWILIO_ACCOUNT_SID,
+                TWILIO_AUTH_TOKEN
+            ),
+            timeout=30
+        )
+
+        print(
+            "[WhatsApp] Twilio send status:",
+            response.status_code
+        )
+
+        if not response.ok:
+            print(
+                "[WhatsApp] Twilio send error:",
+                response.text
+            )
+
+            return False
+
+        print(
+            "[WhatsApp] Message sent successfully."
+        )
+
+        return True
+
+    except Exception as e:
+        print(
+            "[WhatsApp] Send error:",
+            repr(e)
+        )
+
+        return False
+
+
+def process_whatsapp_message(
+    message,
+    sender,
+):
+    print(
+        "[WhatsApp] Processing message:",
+        message
+    )
+
+    with generation_lock:
+        started_at = time.time()
+
+        try:
+            response = generate_response(
+                message
+            )
+
+            elapsed = time.time() - started_at
+
+            print(
+                "[WhatsApp] Generation finished in "
+                f"{elapsed:.2f}s"
+            )
+
+            print(
+                "[WhatsApp] Output:",
+                response
+            )
+
+            send_whatsapp_message(
+                sender,
+                response
+            )
+
+        except Exception as e:
+            print(
+                "[WhatsApp] Processing error:",
+                repr(e)
+            )
+
+
 @app.route(
     "/telegram",
     methods=["POST"]
@@ -443,32 +566,24 @@ def whatsapp_webhook():
         incoming_message
     )
 
-    if not incoming_message:
-        return str(
-            MessagingResponse()
+    if not incoming_message or not sender:
+        return (
+            "",
+            200
         )
 
-    try:
-        response = generate_response(
-            incoming_message
-        )
+    threading.Thread(
+        target=process_whatsapp_message,
+        args=(
+            incoming_message,
+            sender
+        ),
+        daemon=True
+    ).start()
 
-    except Exception as e:
-        print(
-            "[WhatsApp] Error:",
-            repr(e)
-        )
-
-        response = "❤️"
-
-    twilio_response = MessagingResponse()
-
-    twilio_response.message(
-        response
-    )
-
-    return str(
-        twilio_response
+    return (
+        "",
+        200
     )
 
 
