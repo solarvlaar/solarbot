@@ -36,14 +36,6 @@ BLOCKED_NAMES = {
     "thijs",
     "matthijs",
     "friso",
-    "solar",
-    "lucas",
-    "luc",
-    "coen",
-    "daan",
-    "daantje",
-    "olivier",
-    "steven",
 }
 
 generation_lock = threading.Lock()
@@ -56,6 +48,11 @@ print(
 print(
     "[RunPod] API key configured:",
     bool(RUNPOD_API_KEY)
+)
+
+print(
+    "[RunPod] Completion URL:",
+    RUNPOD_COMPLETIONS_URL
 )
 
 
@@ -112,16 +109,16 @@ def remove_truncated_last_line(text, was_truncated):
 
     last_line = lines[-1]
 
-    sentence_endings = (
-        ".",
-        "!",
-        "?",
-        "…",
-        "❤️",
-        "♥️"
-    )
-
-    if last_line.endswith(sentence_endings):
+    if last_line.endswith(
+        (
+            ".",
+            "!",
+            "?",
+            "…",
+            "❤️",
+            "♥️"
+        )
+    ):
         return text
 
     lines.pop()
@@ -180,7 +177,9 @@ def generate_response(prompt):
     started_at = time.time()
 
     try:
-        print("[RunPod] Sending OpenAI completion request...")
+        print(
+            "[RunPod] Sending OpenAI completion request..."
+        )
 
         response = requests.post(
             RUNPOD_COMPLETIONS_URL,
@@ -201,7 +200,13 @@ def generate_response(prompt):
             response.status_code
         )
 
-        response.raise_for_status()
+        if not response.ok:
+            print(
+                "[RunPod] Error response:",
+                response.text
+            )
+
+            return "❤️"
 
         result = response.json()
 
@@ -219,6 +224,7 @@ def generate_response(prompt):
                 "[RunPod] No choices in response:",
                 result
             )
+
             return "❤️"
 
         choice = choices[0]
@@ -247,10 +253,14 @@ def generate_response(prompt):
                 "[RunPod] Blocked name detected:",
                 text
             )
+
             return "❤️"
 
         if not text:
-            print("[RunPod] Empty response.")
+            print(
+                "[RunPod] Empty response."
+            )
+
             return "❤️"
 
         print(
@@ -261,7 +271,10 @@ def generate_response(prompt):
         return text[:500]
 
     except requests.exceptions.Timeout:
-        print("[RunPod] Request timed out.")
+        print(
+            "[RunPod] Request timed out."
+        )
+
         return "❤️"
 
     except requests.exceptions.RequestException as e:
@@ -269,6 +282,7 @@ def generate_response(prompt):
             "[RunPod] Request failed:",
             repr(e)
         )
+
         return "❤️"
 
     except Exception as e:
@@ -276,6 +290,7 @@ def generate_response(prompt):
             "[RunPod] Unexpected error:",
             repr(e)
         )
+
         return "❤️"
 
 
@@ -301,8 +316,7 @@ def process_telegram_message(
 
             print(
                 f"[Generation] Finished update "
-                f"{update_id} "
-                f"in {elapsed:.2f}s"
+                f"{update_id} in {elapsed:.2f}s"
             )
 
             print(
@@ -350,7 +364,9 @@ def process_telegram_message(
     methods=["POST"]
 )
 def telegram_webhook():
-    data = request.get_json(force=True)
+    data = request.get_json(
+        force=True
+    )
 
     update_id = data.get(
         "update_id"
@@ -472,6 +488,7 @@ def setup_telegram_webhook():
         print(
             "[Telegram] Token not configured."
         )
+
         return
 
     webhook_url = (
