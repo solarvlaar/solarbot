@@ -10,11 +10,11 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
-RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID")
+RUNPOD_ENDPOINT_ID = os.getenv(\n    "SOLARBOT_V2_ENDPOINT_ID",\n    "d0u37r2jjwo9h3"\n)
 
-RUNPOD_COMPLETIONS_URL = (
+RUNPOD_CHAT_COMPLETIONS_URL = (
     f"https://api.runpod.ai/v2/"
-    f"{RUNPOD_ENDPOINT_ID}/openai/v1/completions"
+    f"{RUNPOD_ENDPOINT_ID}/openai/v1/chat/completions"
 )
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -63,7 +63,7 @@ print(
 
 print(
     "[RunPod] Completion URL:",
-    RUNPOD_COMPLETIONS_URL
+    RUNPOD_CHAT_COMPLETIONS_URL
 )
 
 print(
@@ -176,23 +176,17 @@ def generate_response(prompt):
         max_new_tokens = 80
         temperature = 0.70
 
-    formatted_prompt = (
-        "<|prompter|>\n"
-        f"{prompt}\n"
-        "<|responder|>\n"
-    )
-
     payload = {
         "model": "solarvlaar/solarbot",
-        "prompt": formatted_prompt,
+        "messages": [\n            {\n                "role": "system",\n                "content": (\n                    "Je bent Solarbot. Antwoord in natuurlijk, informeel " \\n                    "Nederlands alsof je appt. Houd het kort en persoonlijk. " \\n                    "Denk niet hardop."\n                )\n            },\n            {\n                "role": "user",\n                "content": prompt\n            }\n        ],
         "max_tokens": max_new_tokens,
         "temperature": temperature,
         "top_k": 50,
         "top_p": 0.85,
         "repetition_penalty": 1.05,
-        "stop": [
-            "<|prompter|>"
-        ]
+        "chat_template_kwargs": {
+            "enable_thinking": False
+        }
     }
 
     headers = {
@@ -208,7 +202,7 @@ def generate_response(prompt):
         )
 
         response = requests.post(
-            RUNPOD_COMPLETIONS_URL,
+            RUNPOD_CHAT_COMPLETIONS_URL,
             json=payload,
             headers=headers,
             timeout=300
@@ -256,7 +250,10 @@ def generate_response(prompt):
         choice = choices[0]
 
         text = choice.get(
-            "text",
+            "message",
+            {}
+        ).get(
+            "content",
             ""
         ).strip()
 
