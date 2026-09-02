@@ -10,7 +10,10 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
-RUNPOD_ENDPOINT_ID = os.getenv(\n    "SOLARBOT_V2_ENDPOINT_ID",\n    "d0u37r2jjwo9h3"\n)
+RUNPOD_ENDPOINT_ID = os.getenv(
+    "SOLARBOT_V2_ENDPOINT_ID",
+    "d0u37r2jjwo9h3"
+)
 
 RUNPOD_CHAT_COMPLETIONS_URL = (
     f"https://api.runpod.ai/v2/"
@@ -178,7 +181,20 @@ def generate_response(prompt):
 
     payload = {
         "model": "solarvlaar/solarbot",
-        "messages": [\n            {\n                "role": "system",\n                "content": (\n                    "Je bent Solarbot. Antwoord in natuurlijk, informeel " \\n                    "Nederlands alsof je appt. Houd het kort en persoonlijk. " \\n                    "Denk niet hardop."\n                )\n            },\n            {\n                "role": "user",\n                "content": prompt\n            }\n        ],
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Je bent Solarbot. Antwoord in natuurlijk, informeel "
+                    "Nederlands alsof je appt. Houd het kort en persoonlijk. "
+                    "Denk niet hardop."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
         "max_tokens": max_new_tokens,
         "temperature": temperature,
         "top_k": 50,
