@@ -26,6 +26,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
+TWILIO_API_KEY = os.getenv("TWILIO_API_KEY")
+TWILIO_API_SECRET = os.getenv("TWILIO_API_SECRET")
 
 RAILWAY_URL = os.getenv(
     "RAILWAY_URL",
@@ -718,10 +720,55 @@ def generate_media_response(media_type):
     ])
 
 
+def send_whatsapp_typing_indicator(message_sid):
+    if not message_sid:
+        return False
+
+    username = TWILIO_API_KEY or TWILIO_ACCOUNT_SID
+    password = TWILIO_API_SECRET or TWILIO_AUTH_TOKEN
+
+    if not username or not password:
+        print("[WhatsApp] Typing indicator credentials missing.")
+        return False
+
+    try:
+        response = requests.post(
+            "https://messaging.twilio.com/v3/Indicators/Typing.json",
+            json={
+                "channel": "WHATSAPP",
+                "messageId": message_sid,
+            },
+            auth=(username, password),
+            timeout=15,
+        )
+
+        print(
+            "[WhatsApp] Typing indicator status:",
+            response.status_code,
+        )
+
+        if not response.ok:
+            print(
+                "[WhatsApp] Typing indicator error:",
+                response.text,
+            )
+
+        return response.ok
+    except Exception as e:
+        print("[WhatsApp] Typing indicator error:", repr(e))
+        return False
+
+
+def refresh_whatsapp_typing_indicator(message_sid, stop_event):
+    while not stop_event.wait(20):
+        send_whatsapp_typing_indicator(message_sid)
+
+
 def process_whatsapp_message(
     message,
     sender,
     media_type=None,
+    message_sid=None,
 ):
     print(
         "[WhatsApp] Processing message:",
@@ -729,6 +776,15 @@ def process_whatsapp_message(
     )
 
     started_at = time.time()
+    typing_stop_event = threading.Event()
+
+    if message_sid:
+        send_whatsapp_typing_indicator(message_sid)
+        threading.Thread(
+            target=refresh_whatsapp_typing_indicator,
+            args=(message_sid, typing_stop_event),
+            daemon=True,
+        ).start()
 
     try:
         history_key = f"whatsapp:{sender}"
@@ -786,28 +842,35 @@ def process_whatsapp_message(
             "[WhatsApp] Processing error:",
             repr(e)
         )
+    finally:
+        typing_stop_event.set()
 
 
 def flush_whatsapp_text(sender):
     with whatsapp_pending_lock:
-        messages = whatsapp_pending_messages.pop(sender, [])
+        pending_items = whatsapp_pending_messages.pop(sender, [])
         whatsapp_debounce_timers.pop(sender, None)
 
-    if not messages:
+    if not pending_items:
         return
 
     combined_message = "\n".join(
-        message for message in messages if message
+        item[0] for item in pending_items if item[0]
     ).strip()
+    message_sid = pending_items[-1][1]
 
     if combined_message:
         with whatsapp_text_locks[sender]:
-            process_whatsapp_message(combined_message, sender)
+            process_whatsapp_message(
+                combined_message,
+                sender,
+                message_sid=message_sid,
+            )
 
 
-def schedule_whatsapp_text(message, sender):
+def schedule_whatsapp_text(message, sender, message_sid):
     with whatsapp_pending_lock:
-        whatsapp_pending_messages[sender].append(message)
+        whatsapp_pending_messages[sender].append((message, message_sid))
 
         previous_timer = whatsapp_debounce_timers.get(sender)
 
@@ -902,6 +965,11 @@ def whatsapp_webhook():
         ""
     )
 
+    message_sid = request.values.get(
+        "MessageSid",
+        ""
+    )
+
     media_count = int(
         request.values.get("NumMedia", "0") or "0"
     )
@@ -941,12 +1009,19 @@ def whatsapp_webhook():
                 sender,
                 media_type
             ),
+            kwargs={"message_sid": message_sid},
             daemon=True
         ).start()
     else:
+        threading.Thread(
+            target=send_whatsapp_typing_indicator,
+            args=(message_sid,),
+            daemon=True,
+        ).start()
         schedule_whatsapp_text(
             incoming_message,
-            sender
+            sender,
+            message_sid,
         )
 
     return (
