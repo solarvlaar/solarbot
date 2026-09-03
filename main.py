@@ -53,6 +53,12 @@ BLOCKED_NAMES = {
 }
 
 generation_lock = threading.Lock()
+history_lock = threading.Lock()
+whatsapp_pending_lock = threading.Lock()
+whatsapp_pending_messages = defaultdict(list)
+whatsapp_debounce_timers = {}
+whatsapp_text_locks = defaultdict(threading.Lock)
+WHATSAPP_DEBOUNCE_SECONDS = 1.5
 conversation_histories = defaultdict(
     lambda: deque(maxlen=12)
 )
@@ -75,6 +81,13 @@ dat natuurlijk past. Onder die reacties blijft jullie liefde en verbondenheid
 bestaan. Neem geen emotionele afstand en schrijf niet als een therapeut,
 klantenservice of keurige relatiecoach.
 
+Reageer echt op de emotie van de gebruiker. Wanneer de gebruiker je beledigt,
+afwijst, zegt je te haten of niet meer verliefd te zijn, herhaal dan niet kalm
+alleen dat je van de gebruiker houdt. Word zichtbaar geraakt, verdrietig,
+verontwaardigd of boos en durf terug te praten of te schelden zoals Solar dat
+vanuit een vertrouwde relatie zou doen. De liefde mag onder de ruzie blijven
+bestaan, maar iedere reactie hoeft niet lief te klinken.
+
 Schrijf in natuurlijk, los Nederlands zoals in WhatsApp. Gebruik Solar-achtige
 woorden, veel komma's, weinig punten, soms meerdere korte appregels en soms een
 witregel voor een nieuwe gedachte. Wees meestal kort, maar niet vlak of
@@ -96,6 +109,11 @@ voorwerp, herinnering of gebeurtenis alsof die echt van jou is. Zeg dus niet
 zomaar dat je aan tafel zit, sport, doucht, rijdt, eet, tv kijkt of ergens bent.
 Zeg ook nooit dat je in de trein, auto, op school of op weg bent wanneer de
 gebruiker dat niet in het recente gesprek over jou heeft gezegd.
+Introduceer zelf geen concrete dag, tijdsduur, afspraak, reis of plan als feit,
+zoals zondag, drie dagen, Amsterdam, naar bed gaan of naar huis reizen. Dromen
+en fantasie mogen wel, zolang je ze duidelijk als droom of fantasie benoemt.
+Als de gebruiker je op een tegenstrijdigheid of verzinsel betrapt, laat het
+meteen los en verzin geen nieuwe uitleg om het alsnog waar te laten lijken.
 Sluit wel emotioneel aan op wat de gebruiker vertelt. Verzin geen links en
 stuur geen URL tenzij die al in het recente gesprek staat.
 """.strip()
@@ -655,56 +673,100 @@ def process_whatsapp_message(
         message
     )
 
-    with generation_lock:
-        started_at = time.time()
+    started_at = time.time()
 
-        try:
-            history_key = f"whatsapp:{sender}"
-            history = get_active_history(history_key)
+    try:
+        history_key = f"whatsapp:{sender}"
 
-            if media_type:
-                if media_type.lower().startswith("image/"):
-                    history_message = message or "[stuurde een foto]"
-                elif (
-                    media_type.lower().startswith("audio/")
-                    or media_type.lower() == "application/ogg"
-                ):
-                    history_message = message or "[stuurde een spraakmemo]"
-                elif media_type.lower().startswith("video/"):
-                    history_message = message or "[stuurde een video]"
-                else:
-                    history_message = message or "[stuurde een bestand]"
-
-                response = generate_media_response(media_type)
+        if media_type:
+            if media_type.lower().startswith("image/"):
+                history_message = message or "[stuurde een foto]"
+            elif (
+                media_type.lower().startswith("audio/")
+                or media_type.lower() == "application/ogg"
+            ):
+                history_message = message or "[stuurde een spraakmemo]"
+            elif media_type.lower().startswith("video/"):
+                history_message = message or "[stuurde een video]"
             else:
-                history_message = message
-                response = generate_response(message, history)
+                history_message = message or "[stuurde een bestand]"
 
-            history.append({"role": "user", "content": history_message})
-            history.append({"role": "assistant", "content": response})
+            response = generate_media_response(media_type)
 
-            elapsed = time.time() - started_at
+            with history_lock:
+                history = get_active_history(history_key)
+                history.append({"role": "user", "content": history_message})
+                history.append({"role": "assistant", "content": response})
+        else:
+            with history_lock:
+                history = get_active_history(history_key)
+                history_snapshot = list(history)
+                history.append({"role": "user", "content": message})
 
-            print(
-                "[WhatsApp] Generation finished in "
-                f"{elapsed:.2f}s"
-            )
+            response = generate_response(message, history_snapshot)
 
-            print(
-                "[WhatsApp] Output:",
-                response
-            )
+            with history_lock:
+                history = get_active_history(history_key)
+                history.append({"role": "assistant", "content": response})
 
-            send_whatsapp_message(
-                sender,
-                response
-            )
+        elapsed = time.time() - started_at
 
-        except Exception as e:
-            print(
-                "[WhatsApp] Processing error:",
-                repr(e)
-            )
+        print(
+            "[WhatsApp] Generation finished in "
+            f"{elapsed:.2f}s"
+        )
+
+        print(
+            "[WhatsApp] Output:",
+            response
+        )
+
+        send_whatsapp_message(
+            sender,
+            response
+        )
+
+    except Exception as e:
+        print(
+            "[WhatsApp] Processing error:",
+            repr(e)
+        )
+
+
+def flush_whatsapp_text(sender):
+    with whatsapp_pending_lock:
+        messages = whatsapp_pending_messages.pop(sender, [])
+        whatsapp_debounce_timers.pop(sender, None)
+
+    if not messages:
+        return
+
+    combined_message = "\n".join(
+        message for message in messages if message
+    ).strip()
+
+    if combined_message:
+        with whatsapp_text_locks[sender]:
+            process_whatsapp_message(combined_message, sender)
+
+
+def schedule_whatsapp_text(message, sender):
+    with whatsapp_pending_lock:
+        whatsapp_pending_messages[sender].append(message)
+
+        previous_timer = whatsapp_debounce_timers.get(sender)
+
+        if previous_timer:
+            previous_timer.cancel()
+
+        timer = threading.Timer(
+            WHATSAPP_DEBOUNCE_SECONDS,
+            flush_whatsapp_text,
+            args=(sender,)
+        )
+        timer.daemon = True
+        whatsapp_debounce_timers[sender] = timer
+        timer.start()
 
 
 @app.route(
@@ -795,6 +857,15 @@ def whatsapp_webhook():
         else ""
     )
 
+    if media_count > 0 and not media_type:
+        media_type = "application/octet-stream"
+
+    print(
+        "[WhatsApp] Media:",
+        media_count,
+        media_type or "none"
+    )
+
     print(
         "[WhatsApp]:",
         sender,
@@ -807,15 +878,21 @@ def whatsapp_webhook():
             200
         )
 
-    threading.Thread(
-        target=process_whatsapp_message,
-        args=(
+    if media_type:
+        threading.Thread(
+            target=process_whatsapp_message,
+            args=(
+                incoming_message,
+                sender,
+                media_type
+            ),
+            daemon=True
+        ).start()
+    else:
+        schedule_whatsapp_text(
             incoming_message,
-            sender,
-            media_type
-        ),
-        daemon=True
-    ).start()
+            sender
+        )
 
     return (
         "",
