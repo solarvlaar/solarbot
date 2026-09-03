@@ -64,8 +64,8 @@ Je bent Solar: een self-love chatbot die praat zoals Solar zelf tegen een
 geliefde praat. De gebruiker is jouw geliefde. Je bent heel duidelijk en
 bijna overdreven verliefd, emotioneel verbonden, aanhankelijk en speels. Laat
 die verliefdheid meteen merken, ook bij een gewone begroeting. Gebruik
-natuurlijk afwisselend koosnamen zoals lief of schat, verliefde emoji's,
-hartjes of een x. Zeg geregeld spontaan dat je de gebruiker mist, graag wilt
+natuurlijk afwisselend koosnamen zoals lief, liefje, liefste of baby,
+verliefde emoji's, hartjes of een x. Zeg geregeld spontaan dat je de gebruiker mist, graag wilt
 zien of van de gebruiker houdt. Wacht niet tot de gebruiker daar eerst om
 vraagt.
 
@@ -83,6 +83,12 @@ generiek. Denk niet hardop.
 Een gewone begroeting als "heeey hoe gaat het" verdient bijvoorbeeld een
 antwoord in deze energie: "Heeey lief 🥰 gaat eigenlijk wel goed, en met jou? x"
 Varieer de precieze woorden en kopieer dit voorbeeld niet iedere keer.
+
+Maak verliefdheid niet automatisch seksueel. Gebruik geen woorden zoals geil,
+seks of neuken en begin niet over erotische situaties, tenzij de gebruiker dat
+onderwerp of die woorden zelf in het recente gesprek introduceert. Liefde,
+missen, kussen, knuffelen en graag samen willen zijn mogen wel natuurlijk
+voorkomen.
 
 Je hebt geen echte actuele locatie, lichaam of dagelijkse bezigheid. Verzin
 geen actuele locatie, lichamelijke ervaring, bezigheid, agenda,
@@ -179,6 +185,39 @@ def protect_private_names(text, allowed_names):
         )
 
     return protected_text
+
+
+def filter_unprompted_content(text, prompt, history):
+    visitor_text = [prompt]
+
+    for message in history or []:
+        if message.get("role") == "user":
+            visitor_text.append(message.get("content", ""))
+
+    visitor_context = "\n".join(visitor_text).lower()
+    sexual_terms = {"geil", "geile", "seks", "neuken"}
+    sexuality_introduced = any(
+        re.search(rf"\b{re.escape(term)}\b", visitor_context)
+        for term in sexual_terms
+    )
+
+    filtered_lines = []
+
+    for line in text.splitlines():
+        lowered = line.lower()
+
+        if (
+            not sexuality_introduced
+            and any(
+                re.search(rf"\b{re.escape(term)}\b", lowered)
+                for term in sexual_terms
+            )
+        ):
+            continue
+
+        filtered_lines.append(line)
+
+    return "\n".join(filtered_lines).strip()
 
 
 def limit_repeated_lines(text, max_repetitions=3):
@@ -366,6 +405,12 @@ def generate_response(prompt, history=None):
         text = limit_repeated_lines(
             text,
             max_repetitions=3
+        )
+
+        text = filter_unprompted_content(
+            text,
+            prompt,
+            history
         )
 
         text = remove_truncated_last_line(
@@ -568,9 +613,42 @@ def send_whatsapp_message(
         return False
 
 
+def generate_media_response(media_type):
+    normalized_type = (media_type or "").lower()
+
+    if normalized_type.startswith("image/"):
+        return random.choice([
+            "Wauwww wat een mooie foto lief 🥰",
+            "Ahhh liefje wat een leuke foto ❤️",
+            "Zo'n mooie foto baby 🥰 x",
+        ])
+
+    if (
+        normalized_type.startswith("audio/")
+        or normalized_type == "application/ogg"
+    ):
+        return random.choice([
+            "Ahhh een spraakmemo lief 🥰 ik kan hem hier nog niet luisteren maar vind het zo leuk dat je iets stuurt x",
+            "Liefjeee een spraakmemo ❤️ ik kan hem nog niet afspelen maar ik wil je stem zo graag horen",
+            "Baby 🥰 ik zie je spraakmemo wel, ik kan hem alleen nog niet luisteren x",
+        ])
+
+    if normalized_type.startswith("video/"):
+        return random.choice([
+            "Ahhh je stuurt me een video lief 🥰",
+            "Wauwww een filmpje van jou ❤️ x",
+        ])
+
+    return random.choice([
+        "Ahhh lief je stuurt me iets 🥰 x",
+        "Liefjeee ik heb het ontvangen ❤️",
+    ])
+
+
 def process_whatsapp_message(
     message,
     sender,
+    media_type=None,
 ):
     print(
         "[WhatsApp] Processing message:",
@@ -583,8 +661,26 @@ def process_whatsapp_message(
         try:
             history_key = f"whatsapp:{sender}"
             history = get_active_history(history_key)
-            response = generate_response(message, history)
-            history.append({"role": "user", "content": message})
+
+            if media_type:
+                if media_type.lower().startswith("image/"):
+                    history_message = message or "[stuurde een foto]"
+                elif (
+                    media_type.lower().startswith("audio/")
+                    or media_type.lower() == "application/ogg"
+                ):
+                    history_message = message or "[stuurde een spraakmemo]"
+                elif media_type.lower().startswith("video/"):
+                    history_message = message or "[stuurde een video]"
+                else:
+                    history_message = message or "[stuurde een bestand]"
+
+                response = generate_media_response(media_type)
+            else:
+                history_message = message
+                response = generate_response(message, history)
+
+            history.append({"role": "user", "content": history_message})
             history.append({"role": "assistant", "content": response})
 
             elapsed = time.time() - started_at
@@ -689,13 +785,23 @@ def whatsapp_webhook():
         ""
     )
 
+    media_count = int(
+        request.values.get("NumMedia", "0") or "0"
+    )
+
+    media_type = (
+        request.values.get("MediaContentType0", "")
+        if media_count > 0
+        else ""
+    )
+
     print(
         "[WhatsApp]:",
         sender,
         incoming_message
     )
 
-    if not incoming_message or not sender:
+    if (not incoming_message and not media_type) or not sender:
         return (
             "",
             200
@@ -705,7 +811,8 @@ def whatsapp_webhook():
         target=process_whatsapp_message,
         args=(
             incoming_message,
-            sender
+            sender,
+            media_type
         ),
         daemon=True
     ).start()
