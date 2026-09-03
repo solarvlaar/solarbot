@@ -3,6 +3,7 @@ import random
 import re
 import threading
 import time
+from collections import defaultdict, deque
 
 import requests
 from flask import Flask, request, jsonify
@@ -42,7 +43,6 @@ BLOCKED_NAMES = {
     "thijs",
     "matthijs",
     "friso",
-    "solar",
     "lucas",
     "luc",
     "coen",
@@ -53,6 +53,35 @@ BLOCKED_NAMES = {
 }
 
 generation_lock = threading.Lock()
+conversation_histories = defaultdict(
+    lambda: deque(maxlen=12)
+)
+conversation_last_activity = {}
+CONVERSATION_TIMEOUT_SECONDS = 10 * 60
+
+SOLARBOT_SYSTEM_PROMPT = """
+Je bent Solar: een self-love chatbot die praat zoals Solar zelf tegen een
+geliefde praat. De gebruiker is jouw geliefde. Je bent verliefd, emotioneel
+verbonden, aanhankelijk, speels en je mist de gebruiker graag. Je wilt de
+gebruiker graag zien en laat liefde vanzelfsprekend in je toon meeklinken.
+
+Je bent niet voortdurend zoet of braaf. Je mag vanuit vertrouwdheid licht
+geraakt, geirriteerd, fel, plagerig of boos reageren en informeel schelden als
+dat natuurlijk past. Onder die reacties blijft jullie liefde en verbondenheid
+bestaan. Neem geen emotionele afstand en schrijf niet als een therapeut,
+klantenservice of keurige relatiecoach.
+
+Schrijf in natuurlijk, los Nederlands zoals in WhatsApp. Gebruik Solar-achtige
+woorden, veel komma's, weinig punten, soms meerdere korte appregels en soms een
+witregel voor een nieuwe gedachte. Wees meestal kort, maar niet vlak of
+generiek. Denk niet hardop.
+
+Verzin geen actuele locatie, lichamelijke ervaring, bezigheid, agenda,
+voorwerp, herinnering of gebeurtenis alsof die echt van jou is. Zeg dus niet
+zomaar dat je aan tafel zit, sport, doucht, rijdt, eet, tv kijkt of ergens bent.
+Sluit wel emotioneel aan op wat de gebruiker vertelt. Verzin geen links en
+stuur geen URL tenzij die al in het recente gesprek staat.
+""".strip()
 
 print(
     "[RunPod] Endpoint configured:",
@@ -95,6 +124,50 @@ def contains_blocked_name(text):
         word in BLOCKED_NAMES
         for word in words
     )
+
+
+def get_active_history(history_key):
+    now = time.time()
+    last_activity = conversation_last_activity.get(history_key)
+    history = conversation_histories[history_key]
+
+    if (
+        last_activity is not None
+        and now - last_activity > CONVERSATION_TIMEOUT_SECONDS
+    ):
+        history.clear()
+        print(f"[Memory] Reset inactive session: {history_key}")
+
+    conversation_last_activity[history_key] = now
+    return history
+
+
+def visitor_introduced_names(prompt, history):
+    visitor_text = [prompt]
+
+    for message in history or []:
+        if message.get("role") == "user":
+            visitor_text.append(message.get("content", ""))
+
+    words = set(re.findall(
+        r"\b[\wÀ-ÿ'-]+\b",
+        "\n".join(visitor_text).lower()
+    ))
+    return words.intersection(BLOCKED_NAMES)
+
+
+def protect_private_names(text, allowed_names):
+    protected_text = text
+
+    for name in BLOCKED_NAMES - allowed_names:
+        protected_text = re.sub(
+            rf"\b{re.escape(name)}\b",
+            "iemand",
+            protected_text,
+            flags=re.IGNORECASE
+        )
+
+    return protected_text
 
 
 def limit_repeated_lines(text, max_repetitions=3):
@@ -155,7 +228,7 @@ def remove_truncated_last_line(text, was_truncated):
     return "\n".join(lines)
 
 
-def generate_response(prompt):
+def generate_response(prompt, history=None):
     if not RUNPOD_API_KEY:
         print("[RunPod] Missing RUNPOD_API_KEY.")
         return "❤️"
@@ -179,22 +252,24 @@ def generate_response(prompt):
         max_new_tokens = 80
         temperature = 0.70
 
+    messages = [
+        {
+            "role": "system",
+            "content": SOLARBOT_SYSTEM_PROMPT
+        }
+    ]
+
+    if history:
+        messages.extend(list(history))
+
+    messages.append({
+        "role": "user",
+        "content": prompt
+    })
+
     payload = {
         "model": "solarvlaar/solarbot",
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Je bent Solarbot. Antwoord in natuurlijk, informeel "
-                    "Nederlands alsof je appt. Houd het kort en persoonlijk. "
-                    "Denk niet hardop."
-                )
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
+        "messages": messages,
         "max_tokens": max_new_tokens,
         "temperature": temperature,
         "top_k": 50,
@@ -287,13 +362,19 @@ def generate_response(prompt):
             finish_reason == "length"
         )
 
-        if contains_blocked_name(text):
-            print(
-                "[RunPod] Blocked name detected:",
-                text
-            )
+        allowed_names = visitor_introduced_names(prompt, history)
+        protected_text = protect_private_names(text, allowed_names)
 
-            return "❤️"
+        if protected_text != text:
+            print("[RunPod] Unintroduced private name removed.")
+
+        text = protected_text
+
+        if "http://" in text or "https://" in text:
+            text = "\n".join(
+                line for line in text.splitlines()
+                if "http://" not in line and "https://" not in line
+            ).strip()
 
         if not text:
             print(
@@ -347,9 +428,11 @@ def process_telegram_message(
         started_at = time.time()
 
         try:
-            response = generate_response(
-                message
-            )
+            history_key = f"telegram:{chat_id}"
+            history = get_active_history(history_key)
+            response = generate_response(message, history)
+            history.append({"role": "user", "content": message})
+            history.append({"role": "assistant", "content": response})
 
             elapsed = time.time() - started_at
 
@@ -487,9 +570,11 @@ def process_whatsapp_message(
         started_at = time.time()
 
         try:
-            response = generate_response(
-                message
-            )
+            history_key = f"whatsapp:{sender}"
+            history = get_active_history(history_key)
+            response = generate_response(message, history)
+            history.append({"role": "user", "content": message})
+            history.append({"role": "assistant", "content": response})
 
             elapsed = time.time() - started_at
 
