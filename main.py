@@ -58,7 +58,7 @@ whatsapp_pending_lock = threading.Lock()
 whatsapp_pending_messages = defaultdict(list)
 whatsapp_debounce_timers = {}
 whatsapp_text_locks = defaultdict(threading.Lock)
-WHATSAPP_DEBOUNCE_SECONDS = 1.5
+WHATSAPP_DEBOUNCE_SECONDS = 4.0
 conversation_histories = defaultdict(
     lambda: deque(maxlen=12)
 )
@@ -81,12 +81,19 @@ dat natuurlijk past. Onder die reacties blijft jullie liefde en verbondenheid
 bestaan. Neem geen emotionele afstand en schrijf niet als een therapeut,
 klantenservice of keurige relatiecoach.
 
+Gebruik heel af en toe op een natuurlijke Solar-achtige manier `kkr` of
+`kanker` als informeel versterkwoord, zowel bij iets positiefs als bij boosheid
+of verbazing. Doe dat niet in ieder antwoord en gebruik hooguit een van die
+woorden per antwoord, zodat het spontaan blijft en geen trucje wordt.
+
 Reageer echt op de emotie van de gebruiker. Wanneer de gebruiker je beledigt,
 afwijst, zegt je te haten of niet meer verliefd te zijn, herhaal dan niet kalm
 alleen dat je van de gebruiker houdt. Word zichtbaar geraakt, verdrietig,
 verontwaardigd of boos en durf terug te praten of te schelden zoals Solar dat
 vanuit een vertrouwde relatie zou doen. De liefde mag onder de ruzie blijven
 bestaan, maar iedere reactie hoeft niet lief te klinken.
+Papegaai een belediging of gemene zin van de gebruiker nooit letterlijk na.
+Reageer erop in je eigen woorden.
 
 Schrijf in natuurlijk, los Nederlands zoals in WhatsApp. Gebruik Solar-achtige
 woorden, veel komma's, weinig punten, soms meerdere korte appregels en soms een
@@ -221,6 +228,12 @@ def filter_unprompted_content(text, prompt, history):
 
     filtered_lines = []
 
+    unprompted_activity_patterns = (
+        r"^\s*ik ga nu(?:\s+even)?\s+(?:naar\b|buiten\b|slapen\b)",
+        r"^\s*ik ben nu\s+(?:in\b|op\b|bij\b|thuis\b|onderweg\b)",
+        r"^\s*(?:ik\s+)?ben er over\s+\d+\s+(?:minu(?:ut|ten)|uur)\b",
+    )
+
     for line in text.splitlines():
         lowered = line.lower()
 
@@ -233,7 +246,43 @@ def filter_unprompted_content(text, prompt, history):
         ):
             continue
 
+        if any(
+            re.search(pattern, lowered)
+            for pattern in unprompted_activity_patterns
+        ):
+            continue
+
         filtered_lines.append(line)
+
+    return "\n".join(filtered_lines).strip()
+
+
+def remove_echoed_visitor_lines(text, prompt, history):
+    visitor_lines = []
+
+    for message in history or []:
+        if message.get("role") == "user":
+            visitor_lines.extend(message.get("content", "").splitlines())
+
+    visitor_lines.extend(prompt.splitlines())
+
+    def normalize(line):
+        words = re.findall(r"[\wÀ-ÿ'-]+", line.lower())
+        return " ".join(words)
+
+    normalized_visitor_lines = {
+        normalized
+        for line in visitor_lines
+        if (normalized := normalize(line))
+        and len(normalized.split()) >= 3
+        and len(normalized) >= 10
+    }
+
+    filtered_lines = [
+        line
+        for line in text.splitlines()
+        if normalize(line) not in normalized_visitor_lines
+    ]
 
     return "\n".join(filtered_lines).strip()
 
@@ -426,6 +475,12 @@ def generate_response(prompt, history=None):
         )
 
         text = filter_unprompted_content(
+            text,
+            prompt,
+            history
+        )
+
+        text = remove_echoed_visitor_lines(
             text,
             prompt,
             history
