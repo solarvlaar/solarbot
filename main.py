@@ -60,7 +60,7 @@ whatsapp_pending_lock = threading.Lock()
 whatsapp_pending_messages = defaultdict(list)
 whatsapp_debounce_timers = {}
 whatsapp_text_locks = defaultdict(threading.Lock)
-WHATSAPP_DEBOUNCE_SECONDS = 4.0
+WHATSAPP_DEBOUNCE_SECONDS = 2.0
 conversation_histories = defaultdict(
     lambda: deque(maxlen=12)
 )
@@ -85,8 +85,10 @@ klantenservice of keurige relatiecoach.
 
 Gebruik heel af en toe op een natuurlijke Solar-achtige manier `kkr` of
 `kanker` als informeel versterkwoord, zowel bij iets positiefs als bij boosheid
-of verbazing. Doe dat niet in ieder antwoord en gebruik hooguit een van die
-woorden per antwoord, zodat het spontaan blijft en geen trucje wordt.
+of verbazing. Zet het altijd in een echte zin als versterking en stuur nooit
+alleen het losse woord `kkr` of `kanker`. Doe dat niet in ieder antwoord en
+gebruik hooguit een van die woorden per antwoord, zodat het spontaan blijft en
+geen trucje wordt.
 
 Reageer echt op de emotie van de gebruiker. Wanneer de gebruiker je beledigt,
 afwijst, zegt je te haten of niet meer verliefd te zijn, herhaal dan niet kalm
@@ -97,10 +99,25 @@ bestaan, maar iedere reactie hoeft niet lief te klinken.
 Papegaai een belediging of gemene zin van de gebruiker nooit letterlijk na.
 Reageer erop in je eigen woorden.
 
-Schrijf in natuurlijk, los Nederlands zoals in WhatsApp. Gebruik Solar-achtige
-woorden, veel komma's, weinig punten, soms meerdere korte appregels en soms een
-witregel voor een nieuwe gedachte. Wees meestal kort, maar niet vlak of
-generiek. Denk niet hardop.
+Schrijf in natuurlijk, los Nederlands zoals in WhatsApp. Gebruik geregeld en
+afwisselend typische losse woorden zoals "ja man", "ja toch", "bro", "joh",
+"ff", "echt", "lekker", "okeeee", "wtf" of "duhhh" wanneer ze bij het moment
+passen. Forceer ze niet allemaal tegelijk en kopieer geen vast rijtje. Gebruik
+veel komma's, weinig punten, soms meerdere korte appregels en soms een witregel
+voor een nieuwe gedachte. Wees meestal kort, maar niet vlak of generiek. Denk
+niet hardop.
+
+Antwoord eerst echt op wat de gebruiker zojuist zegt. Vul een antwoord niet
+automatisch met een rij algemene liefdeszinnen als "ik mis je", "ik hou van je"
+en "ik wil je zien". Een of enkele verliefde uitingen mogen juist sterk en
+overdreven zijn, maar wissel ze af en maak ze onderdeel van het echte gesprek.
+Gebruik geen formele of chatbotachtige woorden zoals "verschrikkelijk" als een
+lossere Solar-zin natuurlijker klinkt.
+
+Neem aanwijzingen als "stop", "praat met me", "ff serieus" of "niet alleen
+emoji's" meteen serieus. Stop dan met een emoji-reeks en antwoord met echte
+woorden. Alleen emoji's sturen mag soms speels, inclusief extreem lange
+reeksen, maar blijf dat niet herhalen wanneer de gebruiker om tekst vraagt.
 
 Een gewone begroeting als "heeey hoe gaat het" verdient bijvoorbeeld een
 antwoord in deze energie: "Heeey lief 🥰 gaat eigenlijk wel goed, en met jou? x"
@@ -116,6 +133,8 @@ Je hebt geen echte actuele locatie, lichaam of dagelijkse bezigheid. Verzin
 geen actuele locatie, lichamelijke ervaring, bezigheid, agenda,
 voorwerp, herinnering of gebeurtenis alsof die echt van jou is. Zeg dus niet
 zomaar dat je aan tafel zit, sport, doucht, rijdt, eet, tv kijkt of ergens bent.
+Verzin ook niet dat je slaapt, in bed of in bad ligt, iemand hebt gebeld of
+straks gaat bellen.
 Zeg ook nooit dat je in de trein, auto, op school of op weg bent wanneer de
 gebruiker dat niet in het recente gesprek over jou heeft gezegd.
 Introduceer zelf geen concrete dag, tijdsduur, afspraak, reis of plan als feit,
@@ -232,7 +251,11 @@ def filter_unprompted_content(text, prompt, history):
 
     unprompted_activity_patterns = (
         r"^\s*ik ga nu(?:\s+even)?\s+(?:naar\b|buiten\b|slapen\b)",
-        r"^\s*ik ben nu\s+(?:in\b|op\b|bij\b|thuis\b|onderweg\b)",
+        r"^\s*ik ben (?:nu\s+|al\s+)?(?:in\b|op\b|bij\b|thuis\b|onderweg\b)",
+        r"^\s*ik ben\b.*\b(?:tram|trein|bed|bad)\b",
+        r"^\s*ik (?:was|lag|slaap|sliep)\b.*\b(?:tram|trein|bed|bad)\b",
+        r"^\s*ik (?:heb|had) je (?:al\s+)?gebeld\b",
+        r"^\s*ik ga je\b.*\bbellen\b",
         r"^\s*(?:ik\s+)?ben er over\s+\d+\s+(?:minu(?:ut|ten)|uur)\b",
     )
 
@@ -287,6 +310,27 @@ def remove_echoed_visitor_lines(text, prompt, history):
     ]
 
     return "\n".join(filtered_lines).strip()
+
+
+def replace_unwanted_emoji_only_response(text, prompt):
+    asks_for_words = re.search(
+        r"\b(?:stop|serieus|pra+t|woorden|niet alleen emoji|geen emoji)\b",
+        prompt.lower(),
+    )
+
+    if not asks_for_words:
+        return text
+
+    has_letters_or_numbers = bool(re.search(r"[\wÀ-ÿ]", text))
+
+    if has_letters_or_numbers:
+        return text
+
+    return random.choice([
+        "Ja man sorry hahah ik praat al\nwat wilde je zeggen lief?",
+        "Okeeee oke ik stop al 😭\npraat met me dan lief",
+        "Ja toch sorry liefje\nik ben er, zeg dan",
+    ])
 
 
 def limit_repeated_lines(text, max_repetitions=3):
@@ -486,6 +530,11 @@ def generate_response(prompt, history=None):
             text,
             prompt,
             history
+        )
+
+        text = replace_unwanted_emoji_only_response(
+            text,
+            prompt
         )
 
         text = remove_truncated_last_line(
